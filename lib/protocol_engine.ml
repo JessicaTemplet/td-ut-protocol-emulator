@@ -55,7 +55,7 @@ open Signal
    instance for this increment, not yet the single shared 512x16
    macro the design blueprint's gate-budget table assumes (open
    decision, same class as the still-unverified macro-size assumption
-   already flagged in the handoff) -- wiring the loader to load BOTH
+   already flagged in the project log) -- wiring the loader to load BOTH
    engines' programs is its own follow-on step, kept separate so this
    module's own instruction-execution semantics can be tested in
    isolation first, same "test every increment" discipline used for

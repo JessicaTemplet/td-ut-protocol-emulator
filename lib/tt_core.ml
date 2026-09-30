@@ -115,14 +115,14 @@ let tt_um_logic (inputs : Signal.t I.t) =
 
 (* ============================================================
    tt_um_system : the actual reprogrammable core (System) wrapped
-   onto real tt_um pins -- this is the wiring the handoff calls
+   onto real tt_um pins -- this is the wiring the project log calls
    "still open decision #1's follow-on" / "needed before this can
    generate real Tiny Tapeout Verilog for the reprogrammable core".
    `tt_um_logic` above is untouched (still the tested hardwired
    proof-of-concept core, still what test_main.ml exercises).
 
    Pin mapping -- changed this session to close the OTHER half of open
-   decision #1 (the bidirectional-pin gap the handoff flagged: "no
+   decision #1 (the bidirectional-pin gap the project log flagged: "no
    true single-wire bidirectional pin... can't do I2C SDA without
    external wiring"). Engine's 8-pin bus now routes through uio, the
    only tt_um pin group that's genuinely bidirectional per-pin
@@ -135,7 +135,7 @@ let tt_um_logic (inputs : Signal.t I.t) =
      uio_in[2]   -> go (pre-run) / pins_in bit 2 (post-run)
      uio_in[7:3] -> unused pre-run / pins_in bits 3-7 post-run
                     Same "reuse what's already there" pattern the
-                    handoff already established for ui_in's
+                    project log already established for ui_in's
                     data_in/pins_in double-duty -- these bits are
                     loader-control before `run` latches and ordinary
                     protocol input after, never both at once (Engine

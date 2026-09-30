@@ -19,7 +19,7 @@ open Tt_core
       while run=0, switches to a pins_out mirror once run=1; uio_in
       genuinely double-duties as strobe/byte_sel/go pre-run and
       pins_in post-run, on the SAME physical pins, exactly as the
-      handoff's pin-reuse pattern (already established for ui_in)
+      project log's pin-reuse pattern (already established for ui_in)
       now also applies to uio.
    2. Scenario B (the actual point of the uio move): a tiny
       open-drain-style microcode drives a pin low, releases it
