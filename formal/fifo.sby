@@ -1,0 +1,21 @@
+[tasks]
+prove
+cover
+
+[options]
+prove: mode prove
+cover: mode cover
+cover: depth 40
+
+[engines]
+prove: abc pdr
+cover: smtbmc bitwuzla
+
+[script]
+read_verilog -formal shadow_fifo.v
+read_verilog -sv -formal fifo_props.sv
+prep -top fifo_props
+
+[files]
+shadow_fifo.v
+fifo_props.sv

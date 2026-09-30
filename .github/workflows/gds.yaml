@@ -1,0 +1,41 @@
+name: gds
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  gds:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: checkout repo
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: Build GDS
+        uses: TinyTapeout/tt-gds-action@ihp-cmos5l
+        with:
+          pdk: ihp-sg13cmos5l
+
+  precheck:
+    needs: gds
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Run Tiny Tapeout Precheck
+        uses: TinyTapeout/tt-gds-action/precheck@ihp-cmos5l
+
+  gl_test:
+    needs: gds
+    runs-on: ubuntu-24.04
+    steps:
+      - name: checkout repo
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      # The cocotb bench lives in gl_test/ (test/ is the Hardcaml Cyclesim suite).
+      - name: GL test
+        uses: TinyTapeout/tt-gds-action/gl_test@ihp-cmos5l
+        with:
+          test-dir: gl_test

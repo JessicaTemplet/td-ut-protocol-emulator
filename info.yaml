@@ -1,0 +1,39 @@
+yaml_version: 6
+project:
+  title: "TD-uT Protocol Emulator (dual-engine)"
+  author: "Jessica Templet"
+  description: "Reprogrammable dual-engine (uE0 physical + uE1 protocol) protocol emulator ASIC for the Jane Street open-source protocol emulator challenge. Top module tt_um_dual: the dual-engine core on real tt_um pins, targeting IHP CMOS5L (see README.md and docs/design/design_rationale.txt)."
+  tiles: "6x4"
+  analog_pins: 0
+  uses_vapwr: false
+  language: "Verilog"
+  top_module: "tt_um_dual"
+  source_files:
+    - "tt_um_dual.v"
+  clock_hz: 50000000
+
+pinout:
+  ui[0]: "Loader data_in bit 0 (byte-serial program load, pre-run only)"
+  ui[1]: "Loader data_in bit 1 (byte-serial program load, pre-run only)"
+  ui[2]: "Loader data_in bit 2 (byte-serial program load, pre-run only)"
+  ui[3]: "Loader data_in bit 3 (byte-serial program load, pre-run only)"
+  ui[4]: "Loader data_in bit 4 (byte-serial program load, pre-run only)"
+  ui[5]: "Loader data_in bit 5 (byte-serial program load, pre-run only)"
+  ui[6]: "Loader data_in bit 6 (byte-serial program load, pre-run only)"
+  ui[7]: "Loader data_in bit 7 (byte-serial program load, pre-run only)"
+  uo[0]: "Load checksum bit 0 (pre-run) / combined uE0+uE1 pin-out mirror bit 0 (post-run)"
+  uo[1]: "Load checksum bit 1 (pre-run) / combined uE0+uE1 pin-out mirror bit 1 (post-run)"
+  uo[2]: "Load checksum bit 2 (pre-run) / combined uE0+uE1 pin-out mirror bit 2 (post-run)"
+  uo[3]: "Load checksum bit 3 (pre-run) / combined uE0+uE1 pin-out mirror bit 3 (post-run)"
+  uo[4]: "Load checksum bit 4 (pre-run) / combined uE0+uE1 pin-out mirror bit 4 (post-run)"
+  uo[5]: "Load checksum bit 5 (pre-run) / combined uE0+uE1 pin-out mirror bit 5 (post-run)"
+  uo[6]: "Load checksum bit 6 (pre-run) / combined uE0+uE1 pin-out mirror bit 6 (post-run)"
+  uo[7]: "Load checksum bit 7 (pre-run) / combined uE0+uE1 pin-out mirror bit 7 (post-run)"
+  uio[0]: "strobe (pre-run) / shared engine input pin 0 (post-run)"
+  uio[1]: "byte_sel (pre-run) / shared engine input pin 1 (post-run)"
+  uio[2]: "go (pre-run) / shared engine input pin 2 (post-run)"
+  uio[3]: "engine_sel: 0=uE0/phys, 1=uE1/protocol (pre-run) / shared engine input pin 3 (post-run)"
+  uio[4]: "unused (pre-run) / shared engine input pin 4 (post-run)"
+  uio[5]: "unused (pre-run) / shared engine input pin 5 (post-run)"
+  uio[6]: "unused (pre-run) / shared engine input pin 6 (post-run)"
+  uio[7]: "unused (pre-run) / shared engine input pin 7 (post-run)"

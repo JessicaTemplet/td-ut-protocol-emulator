@@ -1,0 +1,180 @@
+
+Architectural Core Concept: "Waveform Dataflow"Instead of executing instructions sequentially via a general-purpose ALU (which requires program counters, execution pipelines, and register file muxes that bloat gate count), TD-µT treats protocol emulation as an event-driven timing graph.1. Unified Delta-Delay Execution EngineInstead of relying on software delay() loops that waste power and clock cycles, TD-µT executes program logic strictly on Edge Match or Timer Expiration.Micro-Instruction Encoding (16-bit word):[15:14] Opcode: WAIT_EDGE, EMIT_STATE, SHIFT_IO, BRANCH_COND[13:10] Pin Mask / Target: Selects 1 of 8 configurable bidirectional pins.[9:0] Payload / Timer Value: Time delta in base-clock cycles (up to 1023 cycles per step) or Bit-Shift Counter.2. Dual-Engine ArchitectureRather than one large CPU core, split the 24-tile budget into two identical Sub-Tile Micro-Engines (µE0 & µE1) sharing a tiny RAM interface.Stream Coupling: Core 0 acts as the physical layer (clock generator, edge detector, bit sampler), streaming deserialized nibbles/bytes into Core 1, which acts as the protocol engine (packet parser, checksum generator, state machine).Hardware Architecture BreakdownPipeline State Diagram & Silicon BudgetBlockFunctional DescriptionGates (Est.)Shift/State Matrix2 × 16-bit Barrel Shifters + Programmable Pin Muxing~3,500Hardware CRC/Parity EngineConfigurable polynomial LUT for CAN, Ethernet (CRC32), USB~2,200Dual µE SequencersEvent-driven control units with shared 512×16-bit OpenRAM macro~6,000Glitch Filter / Sync Unit3-sample digital debouncing & edge capture per I/O pin~1,800Routing & Misc LogicClock distribution, Tiny Tapeout I/O buffers, SPI configuration interface~4,500Total Gate BudgetFits comfortably within the ~24k gate limit for 6x4 tiles~18,000What Makes This Architecture Unique1. Native Hardware Polynomial Generator (USB, CAN, Ethernet Ready)Soft-emulating high-speed protocols like 10Mbit Ethernet (Manchester encoding) or Low-Speed USB (NRZI + Bit-Stuffing + CRC5/CRC16) fails on tiny CPUs because bit-stuffing and CRC updates require too many instructions per bit period.TD-µT embeds a zero-overhead bit-pipe unit:NRZI Encoder/Decoder: Hardware automatically flips levels on bit zeroes; software only handles payload.Auto-Bit-Stuffing: Inserts/deletes a 0 after 6 consecutive 1s directly in the I/O serializer logic.On-the-fly CRC: Computes CRC without stalling the instruction pipeline.2. Self-Clocking Asynchronous Protocol Tracking (Logic Analyzer Mode)Instead of just driving pins out, TD-µT features an autobaud edge-capture mode. The micro-engine can capture timing deltas between incoming edges directly into its register file, letting the chip dynamically adapt to master clocks (e.g., dynamically locking onto variable-rate I2C or UART without hardcoded timer values).Language & Verification Flow1. Design & Hardware Generation: Hardcaml (OCaml)Using Hardcaml allows for type-safe parameterization of internal bitwidths, automatic synthesis of pipeline hazards, and formal representation of the instruction execution pipeline.OCaml(* Conceptual Hardcaml representation of the Event Wait Matrix *)
+open Hardcaml
+open Signal
+
+module WaitEngine = struct
+  let step ~clk ~rst ~pin_inputs ~target_pin ~expected_edge =
+
+The shift toward this event-driven, dual-engine architecture comes from a specific frustration with existing solutions: the "dead-band" gap where general-purpose bit-banging falls off a cliff.Why General-Purpose Microcontrollers Fail at High-Speed DebuggingStandard microcontrollers (and even RP2040’s PIO) work exceptionally well when protocols are synchronous (SPI), slow (UART), or strictly framed (I2C). However, they hit a hard wall when faced with three real-world reverse-engineering and hardware debugging constraints:+---------------------------------------------------------------------------------+
+|                                 THE GAP IN PIO                                  |
+|                                                                                 |
+|   Slow / Simple Protocols                       High-Speed / Asynchronous       |
+|   [UART, SPI, I2C]                              [USB, 10Mbit Ethernet, CAN]     |
+|   =================>   ( The Dead-Band Gap )  ==============================>   |
+|   Handled easily by    * CPU cycles burned      Requires dedicated hard-IP or   |
+|   PIO cycle-counting    in soft CRC / NRZI      fixed ASIC peripherals.          |
+|                         * Jitter accumulates                                    |
++---------------------------------------------------------------------------------+
+1. The Cycle-Counting Delusion at High SpeedsOn a 50 MHz or 100 MHz ASIC tile budget, a 10 Mbit/s signal (Ethernet/USB) gives you 5 to 10 clock cycles per bit period.If a general-purpose state machine has to:Fetch an instruction,Read a pin,Branch on a state condition,Compute an intermediate CRC XOR bit, andUpdate an NRZI flip-flop......it will miss the bit period entirely. Cycle-counting software loops only scale when your system clock is 20–50x faster than your target signal bandwidth. In a constrained 130nm 24-tile budget running at lower clock targets, software abstraction breaks down.2. Protocol Bit-Stuffing and CRC Aren't Specialization—They're Primitive OperatorsEmbedding CRC and bit-stuffing isn't building a dedicated USB block; it is treating polynomial feedback registers and run-length tracking as fundamental ALU primitives (like addition or bit-shifts).UART/SPI/I2C: Pass directly through the primitives (polynomial mask set to 0x00, run-length limit disabled).CAN / USB / Custom RF/IR: Enable the run-length primitive.By modularizing bit-stuffing into a 16-gate configurable run-length counter (e.g., "toggle/stuff after N identical consecutive bits"), the architecture stays generic while enabling high-speed protocols that would otherwise require 10x the clock frequency.Addressing the Core Technical RisksIssue 1: Timing Jitter in Event-Driven Engines ($\pm 2$ Cycles)Risk: UART requires sampling at precisely 1.5, 2.5, 3.5 bit periods. Edge-driven firing introduces phase uncertainty depending on pipeline synchronization.Solution: Hybrid Phase-Locked Counting (Phase Anchoring)The execution unit uses Absolute Phase Anchoring.Signal Edge Detected (T=0)
+       │
+       ▼
+[Latch Base Counter] ──> [Target Sample = T_latch + (1.5 * Bit_Period)]
+                                 │
+                                 ▼
+                    [Hard Pipeline Comparator Matches]
+                                 │
+                                 ▼
+                     [Zero-Jitter Pin Sample]
+When an edge matches, it doesn't just trigger an instruction; it latches the internal 16-bit free-running hardware timer into a Phase Reference Register. All subsequent bit samples within that frame evaluate as:$$\text{Sample Time} = T_{\text{latch}} + (N \times t_{\text{bit}})$$The comparator triggers at the exact cycle value, completely bypassing pipeline instruction-fetch jitter during the middle of a frame.Issue 2: Dual-Engine Inter-Core Coupling and BackpressureRisk: How does Core 0 (Physical Layer) hand off data to Core 1 (Protocol Layer) without overflowing or adding latency?Solution: Asynchronous 4-Entry Shadow Ring Buffer         CORE 0 (PHY)                              CORE 1 (Protocol Engine)
++----------------------------+                +------------------------------+
+| * Edge Capture / Sampler   |                | * Packet FSM                 |
+| * Serializer / Deserializer| ──[4-Entry]──> | * Payload Analysis           |
+| * CRC / Parity Engine      |   Ring FIFO    | * Command Response           |
++----------------------------+                +------------------------------+
+                                      │
+                                [Hardware Stall]
+                          (Pushes Core 0 to WAIT state
+                           if FIFO fills up)
+Core 0 and Core 1 share a tiny 4-entry $\times$ 16-bit hardware FIFO (costing under 600 gates).Core 0 operates as an unbuffered stream filter (deserializes serial bits into words, strips bit-stuffing, validates CRC).Core 1 operates at packet resolution (reading completed 8-bit or 16-bit words).Backpressure: If Core 1 stalls, a hardware flag (FIFO_FULL) automatically halts Core 0’s fetch stage, asserting protocol-level flow control (e.g., holding I2C SCL low via clock stretching) at the physical interface.Issue 3: Noisy Signal Poisoning in Autobaud TrackingRisk: Glitches on noisy lines corrupt dynamic edge-capture values.Solution: 3-Stage Majority Filtering + Windowed BoundsBefore edge capture reaches the micro-engine, signals pass through a Programmable Digital Glitch Suppressor:3-Sample Majority Voter: Pin states must remain stable for $N$ consecutive system clock ticks before registering as a valid transition.Windowed Interval Validation: The dynamic timing logic rejects deltas below a programmed threshold ($\Delta t < t_{\text{minimum}}$), filtering out ringing and reflections.Verification Setup (Hardcaml + Formal Methods)Because timing-critical state machines are prone to subtle deadlocks, the entire design is specified and verified in Hardcaml using bounded model checking and property testing.                  +-----------------------------------+
+                  |      Hardcaml Specification       |
+                  +-----------------------------------+
+                                    │
+           ┌────────────────────────┴────────────────────────┐
+           ▼                                                 ▼
++---------------------+                           +---------------------+
+|   SymbiYosys (Z3)   |                           |    QuickCheck IP    |
+|  Formal Properties  |                           |  Randomized Traces  |
++---------------------+                           +---------------------+
+           │                                                 │
+           ├─> Liveness: FIFO never deadlocks                ├─> Glitched UART
+           ├─> Safety: No unhandled I/O contention           ├─> Stretched I2C
+           └─> Timing: Bit-sampling zero jitter              └─> Corrupted CAN
+Formal Assertion (Liveness): Prove that under any arbitrary external pin input sequence, the Dual-Core Inter-Core FIFO will never enter a dual-lock state where Core 0 waits for FIFO space while Core 1 waits for Core 0 status.Randomized Property Testing: Inject bitstreams with randomized phase noise and glitch pulses to ensure the glitch filter and bounds-checker drop invalid frames without throwing the Micro-Engine out of step.The Ultimate Thesis for This Chip If you want to build standard UART or SPI peripherals, standard state machines exist. This design targets the unforeseen middle ground: reverse-engineering proprietary automotive/industrial interfaces, emulating glitch-sensitive protocols, and handling high-speed serial framing (USB/Ethernet/CAN) on ultra-constrained ASIC real estate. By elevating timing, phase anchoring, and sequence primitives into first-class hardware features, it turns a 24-tile allocation into a protocol-analysis tool.
+    let edge_detected = Edge_detector.detect ~clk ~rst pin_inputs target_pin expected_edge in
+    let timer_expired  = Counter.decrement ~clk ~rst in
+    edge_detected ||| timer_expired
+end
+2. Verification StrategyFormal Verification (SymbiYosys / Z3 via Hardcaml): Formally prove that the micro-engine never enters an unrecoverable deadlock state when waiting for external edge inputs on damaged or noisy lines.Property-Based Random Testing (QuickCheck / OCaml QCheck): Generate randomized protocol bitstreams (glitched UART frames, stretched I2C clock phases, illegal SWD sequences) to test micro-code resilience.Co-Simulation against Spike / QEMU: Run C reference implementations of protocols side-by-side with an event-driven C++ testbench produced by Hardcaml.
+
+## Deviations From Original Design
+
+### Deviation 1: Instruction RAM macro — shared dual-port assumption dropped in favor of two single-port memories
+
+**Original assumption (gate budget table above):** "Dual µE Sequencers — Event-driven control units with shared 512×16-bit OpenRAM macro — ~6,000 gates." This treated the instruction store as roughly one line item's worth of area, sized only in gate-count terms, and assumed both engines would draw from one shared 512×16 macro.
+
+**What we found (roadmap item #1, verified against Tiny Tapeout's actual IHP SG13G2 memory catalog at tinytapeout.com/specs/memory):** a 512×16 macro exists, but only as a **dual-port** part, and it costs **3×4 = 12 tiles at 19.5% cell utilization** — half of the entire 6×4 = 24-tile chip budget spent on one RAM, before either engine's control logic, the FIFO, the CRC/NRZI primitives, or the glitch filter exist. The ~6,000-gate estimate was a rough gate-equivalent count that didn't reflect how hard-macro tile packing actually works; the real area cost is roughly double what the budget table implied, and would have made the 18k/24k total impossible to hit once discovered later, after primitives and protocol microcode were already built on top of it (exactly the "find out before building more on top of it" risk the roadmap flagged this item to catch).
+
+**Resolution:** the loader/engine design already never reads and writes instruction memory in the same cycle — writes only happen during the load phase (`run` = 0), reads only during execution (`run` = 1) — so a true dual-port macro was never actually required by the logic, only assumed by the budget table. Tiny Tapeout's single-port catalog includes a **512×8 macro at 1×2 tiles, 41.2% utilization**. Pairing two of these (low byte / high byte) gives a 512×16-equivalent single-port instruction memory for roughly **4 tiles**, versus 12 for the shared dual-port macro.
+
+This also resolves the open "RAM-sharing" decision (former open decision #2): rather than merging µE0 and µE1 onto one shared dual-port macro with two independent read ports, each engine keeps its **own** single-port memory (two 512×8 macros apiece). This is not just cheaper — it's what `engine.ml` and `protocol_engine.ml` already do in RTL (`Ram.create` with one write port + one read port each, as two independent instances) — no RTL change was needed, only the synthesis/hardening target and the documentation of *why* separate single-port memories are the right call rather than a compromise. Estimated total instruction-memory area: ~8 tiles for both engines combined, instead of 12 for one shared dual-port block — cheaper AND simpler to load (no split-address dual-port loader logic needed).
+
+**Action items this deviation drives:** `Loader.addr_width`'s value (9 bits / 512 entries) is unaffected — it was already sized for 512-deep memory regardless of macro shape. The gate/tile budget table above should be read as superseded for the instruction-RAM line item; a real tile count, not a gate-count guess, is now the right unit for that line pending an actual OpenLane pass (roadmap item #3).
+
+### Deviation 2: The target process is IHP CMOS5L, not SG13G2 (found 2026-09-25)
+
+**What happened:** The first months of physical-design work (tile sizes, PDK install, SRAM macro, DRC decks, PDN, the
+hardening flow) were done against `ihp-sg13g2`. The competition actually targets a different process, **`ihp-sg13cmos5l`**.
+Jane Street's own announcement names "IHP's 130nm CMOS5L process" and points entrants at the "CMOS5L Verilog template".
+
+**Why it was easy to miss:** Tiny Tapeout's regular shuttle (`ttihp26a`, which closed 2026-03-23) uses SG13G2, and both processes
+share the same `--ihp` flag in `tt_tool.py`, the same tile sizes, and even the same SRAM macro. What actually selects CMOS5L is the
+`PDK` environment variable plus a separate tools branch (`ihp-sg13cmos5l`), a separately pinned PDK checkout (not installed through
+`ciel`), and LibreLane 3.1.0.dev3. One template file, the devcontainer Dockerfile, still says `ihp-sg13g2` and is stale. Nothing in the
+tooling fails loudly when the two are mixed. It was noticed because a one-line remark in a community chat ("the next tapeout is 5L")
+was checked against primary sources instead of being dismissed, and the competition blog post and other entrants' repositories confirmed it.
+
+**What carried over unchanged:** all Hardcaml RTL and all Cyclesim suites (PDK-independent), the SRAM macro (CMOS5L links its SRAM
+library to the same files), tile geometry (6x4 = 1289.28 x 710.64 um), and the load-protocol and pin design.
+
+**What had to be redone:** the toolchain install; the DRC and PDN work; the floorplan (see Deviation 4). One finding turned out
+to be process-specific and went away: the SG13G2 KLayout deck reports 1,830 violations inside the SRAM macro's own GDS (the open
+precheck question), while the CMOS5L deck reports 0 on the same file, so that blocker did not exist for the real target.
+
+**Lesson recorded:** confirm the process name, tools branch and pinned PDK commit from the competition's own CI files
+(`tt-gds-action@ihp-cmos5l`) before doing any physical-design work, and keep the regression PDK-independent so RTL work is never
+invalidated by a retarget (which is what happened here).
+
+### Deviation 3: Instruction memory was synthesized as flip-flops, about 5x over budget (found 2026-09-16)
+
+**Original assumption:** the instruction store is one line item (~6,000 gates) in the budget table.
+**What the first full hardening run showed:** Hardcaml's generic `Ram.create` is mapped by Yosys into individual registers and
+multiplexers unless told otherwise: 16,076 sequential cells and **118,642 total cells** for ~24,000 budgeted, with a matching
+multi-hour place-and-route. Nothing in the RTL is wrong; it simply never asks for a hard macro.
+**Resolution:** `lib/sram.ml` instantiates the vendor macro `RM_IHPSG13_1P_512x8_c3_bm_bist` directly, two per engine (low and
+high byte), selected by `create_asic` variants of the engine modules; the plain `create` (behavioral RAM) stays for simulation.
+Result: **1,926 standard cells plus 4 macros.** Consequence for verification: Cyclesim only ever sees the behavioral RAM, so a
+cocotb bench runs the exact shipped Verilog with the vendor macro model (and later the hardened gate-level netlist) to cover
+the macro path (Deviation 6).
+
+### Deviation 4: The SRAM macros needed hand-built power connections and a different floorplan (2026-09-25 to 09-30)
+
+**Problem:** a CMOS5L Tiny Tapeout tile may only route up to Metal4, and its whole power grid is Metal4 stripes. The SRAM
+macro's power pins are also Metal4 bars inside its footprint, so there is no layer above from which `pdngen` can drop a via onto
+them. Every macro-grid option (PDN-0232 on all variants) and the "same-layer overlap" approach failed; `pdngen` also cuts every
+stripe around a macro, leaving the macro pins as islands (17,426 power-grid violations). Global routing was also badly congested
+because the old 2x2 stack pointed the macros' signal pins at the die boundary.
+**Resolution, in three parts:**
+1. Floorplan: all four macros in one row along the bottom, flipped so the power edge faces a small channel and the signal pins
+   face the open logic area (`src/config.json`).
+2. `src/pdn_macro_bridge.tcl`: after `pdngen`, draws Metal3 straps in the channel, Metal4 stubs under each macro power pin, and
+   Via3 arrays at crossings. (A first version shorted VPWR to VGND by covering the other net's via landing pads; LVS caught it, the
+   power-grid checker cannot, because it checks each net separately.)
+3. `PDN_OBSTRUCTIONS`: Tiny Tapeout's precheck requires every power port rectangle to reach within 10 um of both die edges. Stripes
+   cut around the macros started at y=124.9 um (40 violations), so stripes above the macro columns are blocked and only the six
+   full-height pairs beside the macros remain; the standard-cell rails above are fed from those. Worst IR drop is 0.074%, so the
+   reduced grid is not a power problem.
+**Also:** for CMOS5L the precheck runs the KLayout deck (not Magic), so Magic's DRC against the macro uses a trimmed abstract
+(`trim_maglef.py`); only the KLayout result on the real GDS gates submission.
+
+### Deviation 5: The as-built architecture differs from the blueprint in several places
+
+- **Instruction word fields.** Blueprint: `[13:10]` pin mask / target. As built: `[13:11]` pin select (1 of 8) and `[10]` a mode
+  bit. The mode bit is what lets SHIFT_IO carry CAPTURE, and EMIT_STATE carry a release flag, without new opcodes.
+- **Timer range.** Blueprint: payload = raw cycle count, 1023 max. As built: payload counts prescaled ticks and the prescale is
+  loaded once. 9600 baud at 50 MHz needs 5,208 cycles, which a 10-bit payload cannot hold.
+- **Pins.** Blueprint: a fixed in/out split. As built: the 8 shared pins live on `uio`, each with its own output enable
+  (`release_pin`), because I2C needs true open-drain SDA/SCL on one pad and `ui`/`uo` cannot do that. `uo_out` shows the load
+  checksum before run, then mirrors the pin outputs.
+- **Memory.** Blueprint: "shared 512x16 OpenRAM macro". As built: two single-port 512x8 macros per engine, separate memory per
+  engine (Deviations 1 and 3).
+- **Configuration interface.** Blueprint: an SPI configuration interface. As built: a byte-serial program loader (prescale
+  byte first, then 16-bit words, `engine_sel` picks the engine, a running XOR checksum for verification, `go` latches `run`),
+  with no address bus; the same pins double as protocol I/O once running.
+- **Backpressure.** Blueprint: Core 0 enters WAIT_DRAIN when the FIFO is full. As built: only the pushing instruction stalls;
+  non-pushing instructions never do, which keeps mid-frame bit timing out of backpressure's reach.
+- **Phase anchoring.** Built as a prescaled down-counter (timer), as designed.
+- **Autobaud edge capture.** Built as CAPTURE mode, which pushes {pin, level, elapsed cycles} into the shared FIFO, giving a
+  timestamped logic-analyzer channel using existing FIFO plumbing.
+- **Pin ownership.** Per-pin output enables of the two engines are ORed; where both drive a pin, uE1 wins. This is a documented
+  assumption, exercised (never contended) by SPI and I2C, not proved.
+
+### Deviation 6: Verification was built differently from the blueprint's plan, and found things the plan would not have
+
+**Plan in the blueprint:** SymbiYosys liveness with `always/eventually`, QuickCheck randomized traces, co-simulation against
+Spike/QEMU.
+**As built:** directed Cyclesim suites (21), each bug fixed where found (the project log lists about 20 real bugs, e.g. a half-bit
+FSM state, a spurious dwell cycle, a false edge when the pin mux switches, a fetch/`pc` alignment bug); a bounded-exhaustive check of
+the FIFO over all 4^10 sequences; and an **unbounded SymbiYosys proof** (PDR) of the FIFO. Liveness is encoded as safety ("four
+pop-only cycles always leave it empty") rather than `eventually`, which is equivalent for a bounded structure and is what the solver
+handles well; covers show the proof is not vacuous. All of these checks were mutation-tested so they can fail. Randomized/QuickCheck
+testing and Spike/QEMU co-simulation were not done.
+**Findings the original plan would not have produced:**
+- The hard-macro path is invisible to Cyclesim; testing the shipped netlist in cocotb closes that gap, including on the hardened
+  gate-level netlist.
+- Instruction SRAM is not cleared, so a program that runs past its last word executes arbitrary bits (X in simulation). Cyclesim's
+  zero-filled RAM hides it. Current rule: end every program with a halt; a hardware guard is optional future work.
+- Gate-level simulation with stock Icarus Verilog leaves every vendor flop unknown (their `delayed_*` nets come from `$setuphold`);
+  Tiny Tapeout's own iverilog build handles it, and `gl_test/patch_stdcell.py` does for local runs.
+
+### Deviation 7: Scope not yet built (the differentiating primitives)
+
+The blueprint's novelty claim rests on **hardware NRZI, bit-stuffing and CRC as generic primitives, a glitch filter, and a
+demonstration of a USB/CAN-class protocol**. None of these exist in the RTL yet. The working design proves the reprogrammability
+half of the thesis (UART RX, SPI master, I2C master read, all as programs on one core) and the timing and coupling half (phase
+anchoring, backpressured dual-engine FIFO). The "dead-band gap" argument remains an argument until items 6 and 7 of `ROADMAP.md`
+are done. The gate budget is not the constraint: the current design uses 1,926 standard cells against ~24,000.
+
+**Measured numbers that supersede the blueprint's estimates** (hardened, 6x4 tiles): 1,926 standard cells (28,018 um^2) plus
+4 SRAM macros (104,552 um^2); 0.98 mW; setup slack +8.6 ns and hold slack +0.11 ns at the worst corner; LVS, Magic DRC, route DRC
+and antenna all clean; precheck passes.

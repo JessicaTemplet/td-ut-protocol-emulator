@@ -1,0 +1,115 @@
+(executable
+ (name test_main)
+ (modules test_main)
+ (libraries hardcaml tt_core))
+
+(executable
+ (name test_timer)
+ (modules test_timer)
+ (libraries hardcaml tt_core))
+
+(executable
+ (name test_engine)
+ (modules test_engine)
+ (libraries hardcaml tt_core))
+
+(executable
+ (name test_loader)
+ (modules test_loader)
+ (libraries hardcaml tt_core))
+
+(executable
+ (name test_system)
+ (modules test_system)
+ (libraries hardcaml tt_core))
+
+(executable
+ (name test_engine_branch)
+ (modules test_engine_branch)
+ (libraries hardcaml tt_core))
+
+(executable
+ (name test_engine_pinmux)
+ (modules test_engine_pinmux)
+ (libraries hardcaml tt_core))
+
+(executable
+ (name test_tt_um_system)
+ (modules test_tt_um_system)
+ (libraries hardcaml tt_core))
+
+(executable
+ (name test_shadow_fifo)
+ (modules test_shadow_fifo)
+ (libraries hardcaml tt_core))
+
+(executable
+ (name test_engine_push)
+ (modules test_engine_push)
+ (libraries hardcaml tt_core))
+
+(executable
+ (name test_protocol_engine)
+ (modules test_protocol_engine)
+ (libraries hardcaml tt_core))
+
+(executable
+ (name test_dual)
+ (modules test_dual)
+ (libraries hardcaml tt_core))
+
+(executable
+ (name test_dual_loader)
+ (modules test_dual_loader)
+ (libraries hardcaml tt_core))
+
+(executable
+ (name test_tt_um_dual)
+ (modules test_tt_um_dual)
+ (libraries hardcaml tt_core))
+
+
+(executable
+ (name test_spi_master)
+ (modules test_spi_master)
+ (libraries hardcaml tt_core))
+
+(executable
+ (name test_i2c_master)
+ (modules test_i2c_master)
+ (libraries hardcaml tt_core))
+
+(executable
+ (name test_capture)
+ (modules test_capture)
+ (libraries hardcaml tt_core))
+
+(executable
+ (name test_dual_capture)
+ (modules test_dual_capture)
+ (libraries hardcaml tt_core))
+
+(executable
+ (name test_tt_um_dual_spi)
+ (modules test_tt_um_dual_spi)
+ (libraries hardcaml tt_core))
+
+(executable
+ (name test_tt_um_dual_i2c)
+ (modules test_tt_um_dual_i2c)
+ (libraries hardcaml tt_core))
+
+(executable
+ (name gen_vectors)
+ (modules gen_vectors)
+ (libraries hardcaml tt_core))
+
+(executable
+ (name test_shadow_fifo_exhaustive)
+ (modules test_shadow_fifo_exhaustive)
+ (libraries hardcaml tt_core))
+
+(executable
+ (name gen_formal_fifo)
+ (modules gen_formal_fifo)
+ (libraries hardcaml tt_core))
