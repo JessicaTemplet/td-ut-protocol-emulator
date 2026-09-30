@@ -16,7 +16,7 @@ open Tt_core
       watches must not produce a spurious edge purely from the mux
       output jumping between two physical pins with different
       levels. This is the same bug class as tt_core.ml's start_edge/
-      idle guard and engine.ml's WAIT payload race (handoff bugs #3/
+      idle guard and engine.ml's WAIT payload race (project-log bugs #3/
       #4) -- introduced fresh by adding the mux, so it needs its own
       proof, not an inference from the other suites passing.
    4. Output-enable demux: `release_pin` drops a pin's pins_oe bit to
@@ -25,7 +25,7 @@ open Tt_core
       genuinely tri-state-able once wired onto tt_um's uio (see
       tt_core.ml/test_tt_um_system.ml) -- the mechanism I2C's
       open-drain SDA/SCL needs, closing the bidirectional-pin gap the
-      handoff flagged under open decision #1. *)
+      project log flagged under open decision #1. *)
 
 module Sim = Cyclesim.With_interface (Engine.I) (Engine.O)
 

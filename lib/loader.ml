@@ -2,7 +2,7 @@ open Hardcaml
 open Signal
 
 (* ============================================================
-   Program-load protocol (open decision #1 from the handoff).
+   Program-load protocol (open decision #1 from the project log).
 
    Post-tapeout there is no APB/AHB bus -- the only way in is the 8
    ui_in + 8 uio_in pins. This is a byte-serial loader: no address
@@ -50,7 +50,7 @@ open Signal
    host-driven and not guaranteed edge-aligned to this clock domain.
 
    Address width is 9 bits (512 entries) to match the OpenRAM macro
-   size named in the handoff as the still-unverified assumption
+   size named in the project log as the still-unverified assumption
    (open decision #5) -- if that macro turns out to be a different
    depth, this width is the one place to change.
 

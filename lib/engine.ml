@@ -178,7 +178,7 @@ open Signal
    pin 5's current level against pin 3's stale sampled level -- a
    spurious "edge" that never happened on pin 5, same class of bug as
    the start_edge/idle guard (#3) and the WAIT payload race (#4) in the
-   handoff. Fixed the same way: an explicit guard, `pin_sel_stable`,
+   project log. Fixed the same way: an explicit guard, `pin_sel_stable`,
    requires pin_sel to have been the SAME pin last cycle too before an
    edge_match is trusted; the first cycle watching a newly-selected pin
    only establishes a baseline sample, exactly like real hardware can't
