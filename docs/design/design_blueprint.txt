@@ -1,0 +1,78 @@
+1. Concrete Core-0 Physical Layer ArchitectureTo eliminate high-fanout comparator trees, phase anchoring uses a pipelined 16-bit subtraction-comparator unit. Instead of comparing two 16-bit free-running counters directly (which creates a wide bit-comparator path), we calculate the delta to target once on edge detection and decrement a dedicated down-counter.                  ┌────────────────────────┐
+                  │ Pin Input Edge Matcher │
+                  └───────────┬────────────┘
+                              │ Latch Load Trigger
+                              ▼
+┌─────────────────────────────────────────────────────────────┐
+│ Core-0 Data Path                                            │
+│                                                             │
+│   ┌────────────────┐       ┌────────────────────────────┐   │
+│   │ 16-bit Target  │──────>│ 16-bit Down-Counter        │   │
+│   │ Delta Register │       │ (Decrements per sys_clk)   │   │
+│   └────────────────┘       └─────────────┬──────────────┘   │
+│                                          │ Zero Detect      │
+│                                          ▼                  │
+│                            ┌────────────────────────────┐   │
+│                            │ Zero-Jitter Bit Sample     │   │
+│                            └────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────┘
+Timing Closure Strategy (130nm): At a modest target clock of 50 MHz ($20\text{ ns}$ period on IHP CMOS5L), a 16-bit down-counter with zero-detect logic easily closes timing within $< 4\text{ ns}$, leaving ample margin for routing setup/hold times across sub-tiles.2. Formal Verification & Liveness Proofs (SymbiYosys)The inter-core interface uses a non-blocking hardware protocol to prevent cross-core deadlocks during backpressure.Inter-Core Handshake & FIFO State MachineCore 0 (Producer): Pushes 16-bit framed words + 2-bit status flags into a 4-entry Async FIFO.Core 1 (Consumer): Pops words on instruction execution.Backpressure Mechanism: When FIFO_FULL asserts, Core 0 does not freeze completely; it enters a bounded WAIT_DRAIN state. It stops accepting new physical pin transitions and asserts clock-stretching (if enabled), while Core 1 continues executing without blocking.       CORE 0                                FIFO STATUS                               CORE 1
+┌──────────────────┐                     ┌──────────────────┐                   ┌──────────────────┐
+│ Physical Sampler │──Push Word (Valid)─>│ Depth: 0 to 4    │──Pop Word (Read)─>│ Protocol Engine  │
+└────────┬─────────┘                     └────────┬─────────┘                   └──────────────────┘
+         │                                        │
+         │             FIFO_FULL (Depth=4)        │
+         └◄───────────────────────────────────────┘
+         │
+         ▼
+ ┌───────────────┐
+ │ WAIT_DRAIN    │  (Halts Pin Sampling,
+ └───────────────┘   Asserts Hardware Clock-Stretch)
+Formal Properties (Hardcaml + SymbiYosys)Written as safety and liveness invariants:OCaml(* Liveness Proof: The FIFO never enters an unrecoverable full deadlock *)
+let p_fifo_no_deadlock ~clk ~rst ~full ~empty ~push ~pop =
+  let open Hardcaml.Signal in
+  (* Property 1: Full and Empty cannot be simultaneously asserted *)
+  let p_valid_states = not_ (full &&& empty) in
+  (* Property 2: If FIFO is full, Core 1 can always drain it within 4 cycles *)
+  let p_liveness = always (implies full (eventually (~:full))) in
+  p_valid_states &&& p_liveness
+Safety 1 (No Overflow Data Loss): assert property (@(posedge clk) push && full |-> next_cycle (stalled));Safety 2 (Physical State Visibility): Core 1 can read physical pin states directly via a bypass status register (RAW_PIN_REG), avoiding design-time binding restrictions.3. Step-by-Step Bring-Up PlanPhase 1: Single Core UART RX ──> Phase 2: Add Primitives ──> Phase 3: Dual-Core FIFO ──> Phase 4: Full Tapeout Flow
+1.Core 0 Baseline (UART RX):Zero-jitter timing validation.Implement Core 0 in Hardcaml with down-counter phase anchoring. Prove UART 8N1 framing, 1.5-bit period initial sampling, and baud capture up to 1 Mbit/s at 50 MHz clock speed in co-simulation.2.Integrate Primitive Blocks:Hardware NRZI, Bit-Stuffing, CRC16.Add the configurable run-length tracking counter and CRC polynomial feedback shift register (LFSR) inline with Core 0 serialization logic. Verify CAN bus frame parsing and USB low-speed sync sequence detection.3.Core 1 Inter-Core Pipeline:Formal deadlock verification.Integrate Core 1 and the 4-entry shadow FIFO. Run SymbiYosys bounded model checking (BMC) up to 100 steps to formally prove zero deadlock under arbitrary input sequences and assertion of backpressure.4.Synthesis & OpenLane PnR Flow:Area and timing closure on IHP 130nm.Run OpenLane synthesis, place-and-route targeting 6x4 tiles. Verify setup/hold slack, inspect clock-tree buffering, and confirm cell density remains under the 24k gate budget.4. Verification & Hardcaml Architecture Overview                               ┌──────────────────────────────────┐
+                               │     Hardcaml Module Hierarchy    │
+                               └────────────────┬─────────────────┘
+                                                │
+                      ┌─────────────────────────┴─────────────────────────┐
+                      ▼                                                   ▼
+       ┌─────────────────────────────┐                     ┌─────────────────────────────┐
+       │   Core 0: Physical Engine   │                     │  Core 1: Protocol Engine    │
+       ├─────────────────────────────┤                     ├─────────────────────────────┤
+       │ * Down-Counter Phase Anchor │                     │ * Packet State Machine      │
+       │ * Digital Glitch Filter     │                     │ * Memory Bus Interface      │
+       │ * NRZI / Bit-Stuffing Unit  │                     │ * Raw Pin Bypass Access     │
+       └──────────────┬──────────────┘                     └──────────────┬──────────────┘
+                      │                                                   │
+                      └───────────────────────┐   ┌───────────────────────┘
+                                              ▼   ▼
+                               ┌──────────────────────────────────┐
+                               │  4-Entry Shadow Ring Buffer FIFO │
+                               └──────────────────────────────────┘
+
+
+
+
+## As-Built Revision Notes (2026-09-30)
+
+This blueprint is the original design. The design as built differs in the ways listed under "Deviations From Original
+Design" in design_rationale.txt (deviations 1 to 7). In short:
+
+- Target process is IHP CMOS5L (ihp-sg13cmos5l), not SG13G2. Hardcaml RTL is unaffected; physical design was redone.
+- Instruction memory uses hard SRAM macros (two 512x8 per engine); the gate-count line item was replaced by measured areas.
+- Instruction word: pin select is [13:11], a mode bit is [10]; payload counts prescaled ticks.
+- The 8 shared pins are on the bidirectional uio bus with per-pin output enables (open-drain capable).
+- Programs are loaded by a byte-serial loader (no address bus), not an SPI configuration interface.
+- Only a pushing instruction stalls on a full FIFO.
+- Autobaud edge capture exists as CAPTURE mode. Phase anchoring is a prescaled down-counter.
+- Verification: directed simulation, bounded-exhaustive and SymbiYosys (unbounded) proofs of the FIFO, cocotb on the shipped
+  Verilog and the hardened netlist. QuickCheck and Spike/QEMU co-simulation were not done.
+- NOT yet built: hardware NRZI, bit-stuffing and CRC primitives; the glitch filter; a high-speed protocol demonstration.
+  See ROADMAP.md.

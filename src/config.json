@@ -1,0 +1,108 @@
+{
+  "CLOCK_PORT": "clk",
+  "//": "period is in ns; 20ns == 50MHz, matching info.yaml's clock_hz and the design's target clock",
+  "CLOCK_PERIOD": 20,
+  "DESIGN_IS_CORE": false,
+  "//tmpl0": "-- Baseline tunables adopted from TinyTapeout/ttihp-verilog-template@cmos5l's src/config.json (the project's own maintained default for this PDK), not re-derived from the old sg13g2 config -- this PDK may need different defaults than sg13g2 did and there's no reason to guess when the vendor's own template states them directly.",
+  "PL_TARGET_DENSITY_PCT": 60,
+  "PL_RESIZER_HOLD_SLACK_MARGIN": 0.1,
+  "GRT_RESIZER_HOLD_SLACK_MARGIN": 0.05,
+  "RUN_LINTER": 1,
+  "LINTER_INCLUDE_PDK_MODELS": 1,
+  "RUN_KLAYOUT_XOR": 0,
+  "RUN_KLAYOUT_DRC": 0,
+  "DESIGN_REPAIR_BUFFER_OUTPUT_PORTS": 0,
+  "TOP_MARGIN_MULT": 1,
+  "BOTTOM_MARGIN_MULT": 1,
+  "LEFT_MARGIN_MULT": 6,
+  "RIGHT_MARGIN_MULT": 6,
+  "GRT_ALLOW_CONGESTION": 1,
+  "FP_IO_HLENGTH": 2,
+  "FP_IO_VLENGTH": 2,
+  "FP_PDN_VPITCH": 50.0,
+  "FP_PDN_VWIDTH": 2.1,
+  "FP_PDN_MULTILAYER": 0,
+  "MAGIC_DEF_LABELS": 0,
+  "MAGIC_WRITE_LEF_PINONLY": 1,
+  "//0c": "DPL_CELL_PADDING=1 (site-widths, one site = 480nm here) adds a small gap between every pair of adjacent standard cells during detailed placement. On the old sg13g2 target this closed the last 15 Magic DRC violations (long-parallel-run M2/M3 spacing near the SRAM macro's BIST/test-pin tie-off cells). Kept as a sensible default for CMOS5L too -- free at this design's low die utilization, not yet re-verified whether CMOS5L reproduces the same residual.",
+  "DPL_CELL_PADDING": 1,
+  "//0": "FP_SIZING must be 'absolute' for a fixed-die-size project like Tiny Tapeout -- LibreLane's default 'relative' ignores the explicit DIE_AREA from tt_tool.py --create-user-config and computes its own die size from FP_CORE_UTIL/FP_ASPECT_RATIO instead. Root-caused against sg13g2 (the 'design area shrinks partway through the flow' finding); the cmos5l template's own config.json sets this too, for the same reason.",
+  "FP_SIZING": "absolute",
+  "//1": "-- Real IHP SRAM macro integration (RM_IHPSG13_1P_512x8_c3_bm_bist), same part as sg13g2 -- ihp-sg13cmos5l/libs.ref/sg13cmos5l_sram is a symlink to sg13g2_sram in the CMOS5L PDK install (confirmed identical LEF SIZE 236.8 x 110.38um). Four instances: mue0/mue1 (uE0 phys / uE1 protocol engines) x lo/hi (low/high byte of the 16-bit instruction word). Paths repointed at the CMOS5L PDK install (~/ttsetup/pdk_cmos5l), not the old sg13g2-only one (~/ttsetup/pdk) -- see docs/design/design_rationale.txt's CRITICAL FINDING section.",
+  "//1a": "lib corner temps are the macro's own vendor characterization points, not an exact match to this design's STA_CORNERS -- wildcarded by speed class (typ/fast/slow), unchanged reasoning from the sg13g2 config.",
+  "//1b": "instance placement: each macro is 236.8 x 110.38um. All four sit in ONE row along the core bottom, orientation FS (flipped). Why: in the macro's own (N) frame, every signal pin is on the bottom edge (Metal2), while the top edge carries all three PG nets (VSS!, the 4 full-height VDD!, all VDDARRAY!) and no signals. FS turns that power edge to face down into a ~10um channel above the core bottom (y=3.78..14) where src/pdn_macro_bridge.tcl draws the Metal3 straps + Metal4 stubs, and turns the signal edge to face up into the open logic area. (The old 2x2 N stack pointed mue*_lo's signal edge at the die boundary with ~6um to spare -- the likely cause of v5's bottom-band routing congestion.) y=14 keeps the channel entirely inside FP_MACRO_VERTICAL_HALO (10um) so no standard-cell rows survive underneath the macros.",
+  "//1b2": "x = 10 / 280 / 580 / 880: each ~33um gap is wide enough (after PDN_VERTICAL_HALO=10 on both sides) to keep one full-height VPWR+VGND stripe pair (x=262.88/266.98, 562.88/566.98, 862.88/866.98), so every macro has stripes a short strap run away on both sides. The old 50um-pitch phase-alignment rule no longer applies -- macro pins no longer need to line up with stripes, the bridge straps do the connecting.",
+  "//1c": "EXTRA_VERILOG_MODELS points at a hand-trimmed blackbox stub (dir::RM_IHPSG13_1P_512x8_c3_bm_bist_blackbox.v), NOT the vendor's own behavioral .v -- that file's specify block uses SDF timing-check syntax Yosys's Verilog-2005 frontend can't parse, and it's irrelevant for synthesis anyway (only the port list matters; LEF/GDS/LIB carry the physical/timing views). Same file as the sg13g2 config -- the macro's port list is identical, so no changes needed here.",
+  "EXTRA_VERILOG_MODELS": [
+    "dir::RM_IHPSG13_1P_512x8_c3_bm_bist_blackbox.v"
+  ],
+  "MACROS": {
+    "RM_IHPSG13_1P_512x8_c3_bm_bist": {
+      "gds": [
+        "pdk_dir::libs.ref/sg13cmos5l_sram/gds/RM_IHPSG13_1P_512x8_c3_bm_bist.gds"
+      ],
+      "lef": [
+        "pdk_dir::libs.ref/sg13cmos5l_sram/lef/RM_IHPSG13_1P_512x8_c3_bm_bist.lef"
+      ],
+      "lib": {
+        "*typ*": [
+          "pdk_dir::libs.ref/sg13cmos5l_sram/lib/RM_IHPSG13_1P_512x8_c3_bm_bist_typ_1p20V_25C.lib"
+        ],
+        "*fast*": [
+          "pdk_dir::libs.ref/sg13cmos5l_sram/lib/RM_IHPSG13_1P_512x8_c3_bm_bist_fast_1p32V_m55C.lib"
+        ],
+        "*slow*": [
+          "pdk_dir::libs.ref/sg13cmos5l_sram/lib/RM_IHPSG13_1P_512x8_c3_bm_bist_slow_1p08V_125C.lib"
+        ]
+      },
+      "instances": {
+        "mue0_instr_lo": {
+          "location": [
+            10,
+            14
+          ],
+          "orientation": "FS"
+        },
+        "mue0_instr_hi": {
+          "location": [
+            280,
+            14
+          ],
+          "orientation": "FS"
+        },
+        "mue1_instr_lo": {
+          "location": [
+            580,
+            14
+          ],
+          "orientation": "FS"
+        },
+        "mue1_instr_hi": {
+          "location": [
+            880,
+            14
+          ],
+          "orientation": "FS"
+        }
+      }
+    }
+  },
+  "//1d": "PDN_CFG points at a patched copy of librelane 3.1.0.dev3's default pdn_cfg.tcl (extracted from the librelane/librelane:3.1.0.dev3 container itself): the macro-grid block is removed (it can only ever produce PDN-0232 here -- the macro pins are on Metal4, which is also the tile's top routing layer and its only PDN layer), and it sources src/pdn_macro_bridge.tcl, which wraps pdngen and draws the macro power connections itself. See both files for the reasoning.",
+  "//2": "-- PDN hookup: connects each macro instance's own power pins (VDD!/VSS!/VDDARRAY! -- see the macro's LEF) to this design's top-level PDN grid nets (VPWR/VGND, per this PDK's libs.tech/librelane/config.tcl VDD_PIN/GND_PIN). VDDARRAY! is tied to the same VPWR rail -- single-supply design, not a separate voltage domain. Unchanged from the sg13g2 config -- the macro's pin names don't depend on which PDK install it's loaded from.",
+  "PDN_MACRO_CONNECTIONS": [
+    "mue[01]_instr_(lo|hi) VPWR VGND VDD! VSS!",
+    "mue[01]_instr_(lo|hi) VPWR VGND VDDARRAY! VSS!"
+  ],
+  "//3": "-- Magic DRC blackbox for the SRAM macro (MAGIC_DRC_MAGLEFS). Still required on CMOS5L: Magic DRC against the real macro GDS gives 120,951 SRAM-interior errors (CMOS5L's SRAMID exemptions don't cover Magic's whole deck). The file is generated under the CMOS5L tech by gen_maglef.tcl (Magic 'lef read' of the vendor LEF), then post-processed by trim_maglef.py, which clips the solid obsm2/obsm3 blocks back 1.5um from the signal-pin edge and lengthens the Metal2 pin stubs to min area -- without that, Magic flags every wire landing on a macro pin (M2.f/M3.f wide-metal spacing, M2.d) although the real GDS is clean. Only Magic DRC reads this file; the router uses the vendor LEF, and TT precheck for CMOS5L runs the KLayout ihp-sg13cmos5l.drc deck on the real GDS (clean), not Magic.",
+  "MAGIC_DRC_MAGLEFS": [
+    "dir::RM_IHPSG13_1P_512x8_c3_bm_bist.mag"
+  ],
+  "//4": "PDN_OBSTRUCTIONS: TT precheck's pin check needs every VPWR/VGND LEF port rectangle to reach within 10um of BOTH the bottom and top die edge. pdngen cuts each Metal4 stripe around the SRAM row (y=14..124.38), leaving segments that start at y~124.9 -- 40 of them failed 'too far from bottom edge'. Blocking Metal4 stripes over each macro column above the macro (x = macro x0 .. x0+236.8, y = 124.4 .. die top 710.64) means only the full-height stripes in the gaps beside the macros survive; the standard-cell rails above the macros are fed from those. Applies only during PDN generation (removed again before routing).",
+  "PDN_OBSTRUCTIONS": [
+    ["Metal4", 10, 124.4, 246.8, 710.64],
+    ["Metal4", 280, 124.4, 516.8, 710.64],
+    ["Metal4", 580, 124.4, 816.8, 710.64],
+    ["Metal4", 880, 124.4, 1116.8, 710.64]
+  ],
+  "PDN_CFG": "dir::pdn_cfg_custom.tcl"
+}
