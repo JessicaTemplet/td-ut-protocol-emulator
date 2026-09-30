@@ -4,3 +4,4 @@
 cd "$(dirname "$0")" || exit 1
 eval "$(opam env --switch=hardcaml-env)"
 dune exec ./src/main.exe
+cp tt_um_dual.v src/tt_um_dual.v   # CI and LibreLane read the copy in src/
