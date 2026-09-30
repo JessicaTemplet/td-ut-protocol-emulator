@@ -2,9 +2,10 @@
 
 Status as of 2026-09-30. Deadline: **2027-01-18**. Target: `tt_um_dual`, 6x4 tiles, IHP `ihp-sg13cmos5l`.
 
-This roadmap is distilled from `docs/design/design_rationale.txt`, the full session-by-session log of how the project got here
-(every bug, dead end and measurement). Reasons behind the larger changes of direction are in
-`docs/design/design_rationale.txt`; the original architecture is in `docs/design/design_blueprint.txt`.
+This file began as the project's working log and was converted into a roadmap. The detailed session-by-session record
+(every bug, dead end and measurement) is in this file's git history: `git log -p -- ROADMAP.md`.
+Reasons behind the larger changes of direction are in `docs/design/design_rationale.txt`; the original architecture
+is in `docs/design/design_blueprint.txt`.
 
 ## Where it stands
 

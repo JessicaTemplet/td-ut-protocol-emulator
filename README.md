@@ -6,7 +6,7 @@ engines (µE0 physical layer, µE1 protocol layer) coupled by a 4-entry FIFO
 with hardware backpressure; UART/SPI/I2C are *programs* loaded over a
 byte-serial pin protocol, not hardwired blocks. Written in
 [Hardcaml](https://github.com/janestreet/hardcaml); the shipped Verilog is
-generated.
+generated. Architecture, design history and the plan are in the documents below.
 
 ## Documents
 
@@ -14,7 +14,7 @@ generated.
 * [`docs/design/design_blueprint.txt`](docs/design/design_blueprint.txt): the original architecture, with as-built revision notes.
 * [`docs/design/design_rationale.txt`](docs/design/design_rationale.txt): why it is built this way, and every major change of direction
   (wrong-process retarget, flip-flop RAM, macro power, verification).
-* [`docs/design/design_rationale.txt`](docs/design/design_rationale.txt): the full working log, including every bug and measurement.
+* The detailed working log (every bug and measurement) is the git history of `ROADMAP.md`: `git log -p -- ROADMAP.md`.
 
 ## What is verified, and how
 
