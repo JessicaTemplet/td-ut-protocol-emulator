@@ -23,7 +23,7 @@ echo "=== run_gl_test (cocotb on shipped Verilog + vendor SRAM model) ==="
 ./run_gl_test.sh > /tmp/regress_step.log 2>&1 || { echo "FAILED: gl_test"; fail=1; }
 tail -6 /tmp/regress_step.log
 echo "=== run_formal_fifo (SymbiYosys unbounded proof; needs OSS CAD Suite) ==="
-if [ -f "${OSS_CAD:-/mnt/d/oss-cad-suite}/environment" ]; then
+if [ -f "${OSS_CAD:-$HOME/oss-cad-suite}/environment" ]; then
   ./run_formal_fifo.sh > /tmp/regress_step.log 2>&1 || { echo "FAILED: formal fifo"; fail=1; }
   grep "DONE" /tmp/regress_step.log
 else
