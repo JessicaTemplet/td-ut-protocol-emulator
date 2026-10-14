@@ -1,0 +1,38 @@
+cff-version: 1.2.0
+message: "If you use this design or its tools, please cite it as below."
+type: software
+title: "TD-µT: reprogrammable dual-engine protocol emulator ASIC"
+abstract: >-
+  A reprogrammable protocol emulator ASIC for Tiny Tapeout on IHP CMOS5L: two
+  microcode engines (physical layer and protocol layer) coupled by a
+  backpressured FIFO, with a generic hardware bit pipe (NRZI, bit stuffing,
+  CRC) and a glitch filter. UART, SPI, I2C and USB low-speed receive run as
+  programs loaded over the pins. RTL in Hardcaml; assembler and loader in Axiom.
+authors:
+  - family-names: Templet
+    given-names: Jessica
+repository-code: "https://github.com/JessicaTemplet/td-ut-protocol-emulator"
+license: Apache-2.0
+keywords:
+  - ASIC
+  - Tiny Tapeout
+  - IHP CMOS5L
+  - Hardcaml
+  - Axiom
+  - protocol emulator
+  - USB
+references:
+  - type: software
+    title: Axiom
+    abstract: "The language the assembler and program loader (tools/tdasm) is written in."
+    authors:
+      - family-names: Paige
+        given-names: Chris
+    repository-code: "https://github.com/chrispaig3/Axiom"
+    version: "0.7.8"
+  - type: software
+    title: Hardcaml
+    abstract: "The hardware description library the RTL is written in."
+    authors:
+      - name: Jane Street
+    repository-code: "https://github.com/janestreet/hardcaml"
