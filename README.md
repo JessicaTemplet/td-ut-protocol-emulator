@@ -78,6 +78,17 @@ python3 tt/tt_tool.py --create-tt-submission --ihp
   are placed flipped in one row (`src/config.json`). `src/*.mag` is a trimmed
   abstract used only by Magic DRC (`trim_maglef.py`).
 
+## Acknowledgements
+
+* The assembler and program loader (`tools/tdasm`) is written in
+  [Axiom](https://github.com/chrispaig3/Axiom), a language by Chris Paige
+  ([@chrispaig3](https://github.com/chrispaig3)).
+* The RTL is written in [Hardcaml](https://github.com/janestreet/hardcaml) by Jane Street.
+* Hardened with the [Tiny Tapeout](https://tinytapeout.com) flow and LibreLane on IHP's open
+  [`ihp-sg13cmos5l`](https://github.com/IHP-GmbH/IHP-Open-PDK) PDK.
+
+To cite this project, use GitHub's "Cite this repository" button (from [`CITATION.cff`](CITATION.cff)).
+
 ## AI Usage Disclosure
 
 Claude was used to varying degrees throughout this process, primarily for tests, documentation, extended debugging sessions, and to accelerate realignment with the correct target. The assembler and loader (`tools/tdasm`) was written by Claude, in Axiom, and verified against the hardware's own test vectors. The majority of the chip's code is human written, with AI verification and review to prevent compounding failures and facilitate a better outcome than solo execution could have produced.
