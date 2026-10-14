@@ -28,7 +28,7 @@ caveats are listed in `docs/design/design_rationale.txt`, Deviation 7.
 | 5 | Formal verification of the FIFO | **Done for the FIFO** | SymbiYosys unbounded proof (PDR) of order/flags/drop semantics and pop-/push-liveness, with covers; plus a bounded-exhaustive check of all 4^10 sequences. System-level "no deadlock" across both engines is directed simulation on top of the proved FIFO contract. |
 | 6 | Hardware NRZI / bit-stuffing / CRC, then glitch filter | **Done** | `lib/bitpipe.ml`: one configurable unit, one `PIPE_BIT` instruction per bit (USB low speed and CAN are two configurations); `lib/glitch_filter.ml`: N-consecutive-samples filter. Checked against an independent transmitter, real USB vectors (SETUP token, GET_DESCRIPTOR CRC16), 300 random USB packets, 300 random CAN frames, all single-bit corruptions. Windowed interval validation (the blueprint's second filter stage) is not built. |
 | 7 | Demonstrate one high-speed protocol (USB low-speed or CAN) | **Done (USB low speed, receive)** | A four-instruction loop receives USB low-speed packets on the dual-engine core, through the real pins and in cocotb on the shipped Verilog. The same program keeps up down to 8 cycles per bit (6.25 Mbit/s at 50 MHz). No transmit path and no per-edge resync yet. |
-| 8 | Final synthesis and gate-budget check | **Done, with the bit pipe** | Re-hardened with the bit pipe in: 3,704 standard cells + 4 macros against a ~24k budget (was 1,926 before it). LVS, Magic DRC, route DRC and antenna 0; setup WNS +6.3 ns, hold WNS +0.11 ns; 14 max-slew and 3 max-cap warnings (slow corner); TT precheck passes on the new GDS. |
+| 8 | Final synthesis and gate-budget check | **Done, with the bit pipe** | Re-hardened with the bit pipe in: 3,704 standard cells + 4 macros against a ~24k budget (was 1,926 before it). LVS, Magic DRC, route DRC and antenna 0; setup WNS +6.3 ns, hold WNS +0.11 ns; 14 max-slew (slow corner), up to 3 max-cap (SRAM output pins) and 31 max-fanout (28 of them clock-tree leaf buffers) warnings; TT precheck passes on the new GDS. |
 | 9 | Freeze the tape-out target | **Done** | `tt_um_dual`. `tt_um_logic` and `tt_um_system` are still generated as tested fallbacks. |
 | 10 | Submission packaging | **Mostly done** | `info.yaml`, docs, pinout, CI workflow, README exist. Remaining: push to GitHub, green CI, submit. |
 
@@ -40,7 +40,7 @@ caveats are listed in `docs/design/design_rationale.txt`, Deviation 7.
 - cocotb on the shipped `tt_um_dual.v` with the vendor SRAM model (SPI, I2C, USB good and corrupted packet), and on the
   hardened gate-level netlist (4/4)
 - Physical, with the bit pipe: LVS 0, Magic DRC 0, route DRC 0, antenna 0, setup WNS +6.3 ns, hold WNS +0.11 ns,
-  14 max-slew and 3 max-cap warnings (slow corner)
+  14 max-slew (slow corner), up to 3 max-cap and 31 max-fanout warnings (see the build log)
 - TT precheck (KLayout `ihp-sg13cmos5l` deck, pin, boundary, layer, cell-name checks): pass
 - One command re-runs everything: `./run_regression.sh`
 
@@ -325,7 +325,14 @@ pins and loader, and later in cocotb on the shipped Verilog and the hardened net
 - Re-harden with the bit pipe in: flow complete, LVS 0, Magic DRC 0, antenna 0, no setup/hold violations, new
   `tt_submission/` generated. Gate-level cocotb on the new netlist: SPI, I2C and USB good/corrupted all pass (4/4).
   Post-bit-pipe numbers: 3,704 standard cells + 4 macros (was 1,926), setup WNS +6.3 ns, hold WNS +0.11 ns, route DRC 0,
-  14 max-slew and 3 max-cap warnings at the slow corner. TT precheck passes on the new GDS.
+  14 max-slew warnings at the slow corner. TT precheck passes on the new GDS.
+  Signoff STA also reports, with timing met at every corner:
+  - Max-cap: 2 at the slow corner, 3 at typ and fast. All are SRAM macro data-out pins (`A_DOUT`) driving slightly
+    more than their 0.064 pF limit; the worst is `mue1_instr_hi/A_DOUT[2]` at 0.074 pF (16% over).
+  - Max-fanout: 31 at every corner (fanout does not depend on corner) against a limit of 8. 28 are clock-tree leaf
+    buffers (`clkbuf_leaf_*`) driving 11 to 19 flops each; CTS groups sinks by its own clustering rules, and clock
+    slew and skew are checked separately. The other 3 are resizer-inserted `fanout*` buffers driving 10.
+  None of these block precheck. A possible tidy-up is tightening the CTS cluster size and buffering the SRAM outputs.
 - Full regression with the bit pipe in: all pass, including the formal FIFO proof. One earlier regression run reported
   the formal FIFO step as failed, with the FIFO, its generator and the proof files unchanged since the last pass; the
   same proof passed on every rerun, and the cause could not be recovered because each step's log overwrote the last.
