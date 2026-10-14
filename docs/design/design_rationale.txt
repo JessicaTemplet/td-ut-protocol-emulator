@@ -167,14 +167,48 @@ testing and Spike/QEMU co-simulation were not done.
 - Gate-level simulation with stock Icarus Verilog leaves every vendor flop unknown (their `delayed_*` nets come from `$setuphold`);
   Tiny Tapeout's own iverilog build handles it, and `gl_test/patch_stdcell.py` does for local runs.
 
-### Deviation 7: Scope not yet built (the differentiating primitives)
+### Deviation 7: The differentiating primitives were built last, after the chip itself was submittable (2026-09-30)
 
 The blueprint's novelty claim rests on **hardware NRZI, bit-stuffing and CRC as generic primitives, a glitch filter, and a
-demonstration of a USB/CAN-class protocol**. None of these exist in the RTL yet. The working design proves the reprogrammability
-half of the thesis (UART RX, SPI master, I2C master read, all as programs on one core) and the timing and coupling half (phase
-anchoring, backpressured dual-engine FIFO). The "dead-band gap" argument remains an argument until items 6 and 7 of `ROADMAP.md`
-are done. The gate budget is not the constraint: the current design uses 1,926 standard cells against ~24,000.
+demonstration of a USB/CAN-class protocol**. They were deliberately sequenced after the physical flow (Deviations 2 to 4),
+because without a chip that clears the toolchain there is nothing to add features to. They are now built:
 
-**Measured numbers that supersede the blueprint's estimates** (hardened, 6x4 tiles): 1,926 standard cells (28,018 um^2) plus
-4 SRAM macros (104,552 um^2); 0.98 mW; setup slack +8.6 ns and hold slack +0.11 ns at the worst corner; LVS, Magic DRC, route DRC
-and antenna all clean; precheck passes.
+- **Bit pipe** (`lib/bitpipe.ml`): one `PIPE_BIT` instruction per bit performs NRZI decode, bit un-stuffing, a serial CRC and byte
+  assembly. Nothing in it is USB- or CAN-specific: stuffing limit and polarity rule, CRC width / polynomial / reflection / init /
+  residue, bytes to skip before the CRC starts, and bit order are configuration, loaded once. USB low speed and CAN are two
+  configurations of the same hardware, and UART/SPI/I2C programs simply never use it. Bytes go to the protocol engine through
+  the existing FIFO, followed by a status word (CRC ok, stuffing error, byte alignment).
+- **Glitch filter** (`lib/glitch_filter.ml`): a pin change is accepted only after N consecutive stable samples (N = 0 is a pure
+  bypass with no latency). It sits on the shared pin bus, so both engines see filtered pins.
+- **Plumbing**: the new instructions are sub-operations of `SHIFT_IO` with `mode` = 1 (CAPTURE is sub-operation 0, unchanged, so
+  every existing program is untouched). Configuration rides the existing loader through a new select bit, `uio[4]`, which costs
+  no new pin (pre-run it selects config bytes, post-run it is ordinary pin 4). The protocol engine's word-branch now reaches all
+  16 bits of the popped word (payload bit 9), needed to recognise the status word among data bytes.
+
+**What was verified.** The hardware is checked against an independent reference transmitter (CRC, stuffing and NRZI done in the
+opposite direction, in plain OCaml): the real USB SETUP token `2D 00 10` (CRC5) and the real GET_DESCRIPTOR data stage with CRC16
+`DD 94`, 300 random USB packets with forced stuffing, 300 random CAN frames, and every single-bit line corruption of a packet
+rejected. On the dual-engine core, a four-instruction loop receives USB low-speed packets through the real `tt_um_dual` pins
+(program and configuration loaded over the pins) and on the shipped Verilog and hardened netlist in cocotb. A 3-cycle glitch on
+the sample instant corrupts a packet with the filter off and is absorbed with it on. Five deliberate hardware mutations
+(un-stuffing off, CRC feedback dropped, CRC skip ignored, NRZI inverted, filter accepting early) are each caught.
+
+**How fast it keeps up.** The same receive program, re-timed, decodes all test packets down to **8 clock cycles per bit**
+(6.25 Mbit/s at 50 MHz) and fails at 7, so the loop has roughly the 5 to 10 cycles per bit budget the blueprint argues a
+fetch-and-execute core cannot reach without hardware primitives. USB low speed itself needs 33 cycles per bit at 50 MHz, so the
+headroom is about 4x.
+
+**What this does not claim.**
+- Receive only. There is no transmit path: `EMIT_STATE` drives a compile-time bit, so hardware stuffing / NRZI / CRC on transmit
+  needs the output shift-register opcode noted in `ROADMAP.md`.
+- No per-edge resynchronisation. Sampling free-runs from the SYNC edge on a timer, so the test bit period is an exact integer
+  number of clocks (32 cycles per bit, i.e. USB low speed at a 48 MHz clock); a real 1.5% tolerant link at 50 MHz would need a
+  resync feature.
+- Not a USB device: no handshake transmission, no token decoding, no D+/D- level handling.
+- The CAN configuration is proven on the bit pipe with generated frames, not yet as a full dual-engine program through the pins.
+- The blueprint's second glitch stage, windowed interval validation (rejecting edge-to-edge gaps below a minimum), is not built.
+- Manchester / 10 Mbit Ethernet phase tracking is not built.
+
+**Measured numbers that supersede the blueprint's estimates** (hardened, 6x4 tiles, before the bit pipe was added):
+1,926 standard cells (28,018 um^2) plus 4 SRAM macros (104,552 um^2); 0.98 mW; setup slack +8.6 ns and hold slack +0.11 ns at the
+worst corner; LVS, Magic DRC, route DRC and antenna all clean; precheck passes.

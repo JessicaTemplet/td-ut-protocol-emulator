@@ -1,6 +1,6 @@
 # Roadmap: TD-µT protocol emulator (Tiny Tapeout, IHP CMOS5L)
 
-Status as of 2026-09-30. Deadline: **2027-01-18**. Target: `tt_um_dual`, 6x4 tiles, IHP `ihp-sg13cmos5l`.
+Status as of 2026-10-13. Deadline: **2027-01-18**. Target: `tt_um_dual`, 6x4 tiles, IHP `ihp-sg13cmos5l`.
 
 This file began as the project's working log and was converted into a roadmap. The detailed session-by-session record
 (every bug, dead end and measurement) is in this file's git history: `git log -p -- ROADMAP.md`.
@@ -14,8 +14,9 @@ backpressured FIFO, programs loaded byte-serially over the pins). It **clears th
 end**: hardened with `tt_tool.py`, LVS / Magic DRC / route DRC / antenna / power-grid all clean, no timing
 violations, TT precheck passes, and the gate-level netlist passes the same testbench as the RTL.
 
-What is **not** built yet is the part of the original pitch that goes beyond UART/SPI/I2C: the hardware
-NRZI / bit-stuffing / CRC primitives, the glitch filter, and a high-speed protocol demonstration (items 6 and 7 below).
+The part of the original pitch that goes beyond UART/SPI/I2C is built too: a generic hardware bit pipe (NRZI,
+bit-stuffing, CRC), a glitch filter, and a USB low-speed receive demo (items 6 and 7 below). It is receive-only, and the
+caveats are listed in `docs/design/design_rationale.txt`, Deviation 7.
 
 ## The original 10-item plan, and what happened to each
 
@@ -26,19 +27,21 @@ NRZI / bit-stuffing / CRC primitives, the glitch filter, and a high-speed protoc
 | 3 | Early synthesis pass | **Done, and it changed the project** | Found instruction RAM inferred as ~16,000 flip-flops (118,642 cells, ~5x over budget); fixed with the hard SRAM macro. Also uncovered the wrong-process problem (see below). Final: 1,926 standard cells + 4 macros. |
 | 4 | SPI, then I2C microcode | **Done** | Both run in Cyclesim, through the real `tt_um_dual` pins, and on the shipped Verilog + hardened netlist in cocotb. I2C uses the open-drain pin path. |
 | 5 | Formal verification of the FIFO | **Done for the FIFO** | SymbiYosys unbounded proof (PDR) of order/flags/drop semantics and pop-/push-liveness, with covers; plus a bounded-exhaustive check of all 4^10 sequences. System-level "no deadlock" across both engines is directed simulation on top of the proved FIFO contract. |
-| 6 | Hardware NRZI / bit-stuffing / CRC, then glitch filter | **Not started** | Only the timestamped edge-capture mode (`CAPTURE`) exists, which covers the autobaud / logic-analyzer idea. |
-| 7 | Demonstrate one high-speed protocol (USB low-speed or CAN) | **Not started** | Depends on 6. The "dead-band gap" thesis is currently an argument, not a demonstration. |
-| 8 | Final synthesis and gate-budget check | **Done for the current design** | 1,926 cells against a ~24k budget, so there is large headroom for item 6. Must be re-run if 6 is added. |
+| 6 | Hardware NRZI / bit-stuffing / CRC, then glitch filter | **Done** | `lib/bitpipe.ml`: one configurable unit, one `PIPE_BIT` instruction per bit (USB low speed and CAN are two configurations); `lib/glitch_filter.ml`: N-consecutive-samples filter. Checked against an independent transmitter, real USB vectors (SETUP token, GET_DESCRIPTOR CRC16), 300 random USB packets, 300 random CAN frames, all single-bit corruptions. Windowed interval validation (the blueprint's second filter stage) is not built. |
+| 7 | Demonstrate one high-speed protocol (USB low-speed or CAN) | **Done (USB low speed, receive)** | A four-instruction loop receives USB low-speed packets on the dual-engine core, through the real pins and in cocotb on the shipped Verilog. The same program keeps up down to 8 cycles per bit (6.25 Mbit/s at 50 MHz). No transmit path and no per-edge resync yet. |
+| 8 | Final synthesis and gate-budget check | **Done, with the bit pipe** | Re-hardened with the bit pipe in: 3,704 standard cells + 4 macros against a ~24k budget (was 1,926 before it). LVS, Magic DRC, route DRC and antenna 0; setup WNS +6.3 ns, hold WNS +0.11 ns; 14 max-slew and 3 max-cap warnings (slow corner); TT precheck passes on the new GDS. |
 | 9 | Freeze the tape-out target | **Done** | `tt_um_dual`. `tt_um_logic` and `tt_um_system` are still generated as tested fallbacks. |
 | 10 | Submission packaging | **Mostly done** | `info.yaml`, docs, pinout, CI workflow, README exist. Remaining: push to GitHub, green CI, submit. |
 
 ## Verified so far
 
-- 21 Cyclesim suites (ISA, timer, loader, FIFO, dual-engine relay, CAPTURE, SPI, I2C, real-pin wiring)
+- 25 Cyclesim suites (ISA, timer, loader, FIFO, dual-engine relay, CAPTURE, SPI, I2C, bit pipe, glitch filter,
+  USB low-speed receive, real-pin wiring)
 - FIFO bounded-exhaustive check and SymbiYosys unbounded proof, each mutation-checked so they can fail
-- cocotb on the shipped `tt_um_dual.v` with the vendor SRAM model (SPI and I2C), and on the hardened gate-level netlist
-- Physical: LVS 0, Magic DRC 0, route DRC 0, antenna 0, power-grid 0, setup WNS +8.6 ns, hold WNS +0.11 ns,
-  worst IR drop 0.074%, 10 max-slew (slow corner), 0 max-cap
+- cocotb on the shipped `tt_um_dual.v` with the vendor SRAM model (SPI, I2C, USB good and corrupted packet), and on the
+  hardened gate-level netlist (4/4)
+- Physical, with the bit pipe: LVS 0, Magic DRC 0, route DRC 0, antenna 0, setup WNS +6.3 ns, hold WNS +0.11 ns,
+  14 max-slew and 3 max-cap warnings (slow corner)
 - TT precheck (KLayout `ihp-sg13cmos5l` deck, pin, boundary, layer, cell-name checks): pass
 - One command re-runs everything: `./run_regression.sh`
 
@@ -57,12 +60,12 @@ NRZI / bit-stuffing / CRC primitives, the glitch filter, and a high-speed protoc
   needs either an output shift-register opcode or per-transfer reprogramming.
 - **System-level formal proof** that the two engines cannot deadlock (currently directed simulation).
 
-### C. The differentiators (the original thesis; largest remaining effort)
-- Hardware NRZI, bit-stuffing and CRC as generic ALU-style primitives (configurable polynomial / run-length, off for UART/SPI/I2C).
-- 3-sample glitch filter with windowed interval validation.
-- One high-speed protocol program (USB low-speed or CAN) using those primitives, simulated end to end.
-- Optionally the mid-bit phase-tracking counter for Manchester / 10 Mbit Ethernet.
-- Re-run item 8 (synthesis, budget, precheck, gate-level) with everything in.
+### C. The differentiators (the original thesis)
+- Done: hardware NRZI, bit-stuffing and CRC as one generic bit pipe; the N-sample glitch filter; USB low-speed receive
+  simulated end to end and on the shipped Verilog; item 8 re-run with everything in.
+- Not built: windowed interval validation (the glitch filter's second stage), a transmit path (needs the runtime-data
+  output opcode in B), per-edge resync for a real 1.5%-tolerant USB link, CAN as a full program through the pins, and
+  the mid-bit phase-tracking counter for Manchester / 10 Mbit Ethernet.
 
 Sequencing: A first so a valid entry exists; then C (it is the novelty claim, and the gate budget has room for it);
 B items as time allows. Each step in B and C ends with the full loop: regression, harden, precheck, gate-level bench.

@@ -74,5 +74,7 @@ Design" in design_rationale.txt (deviations 1 to 7). In short:
 - Autobaud edge capture exists as CAPTURE mode. Phase anchoring is a prescaled down-counter.
 - Verification: directed simulation, bounded-exhaustive and SymbiYosys (unbounded) proofs of the FIFO, cocotb on the shipped
   Verilog and the hardened netlist. QuickCheck and Spike/QEMU co-simulation were not done.
-- NOT yet built: hardware NRZI, bit-stuffing and CRC primitives; the glitch filter; a high-speed protocol demonstration.
-  See ROADMAP.md.
+- Hardware NRZI, bit-stuffing and CRC are built as one generic, configurable "bit pipe" (one PIPE_BIT instruction per bit;
+  USB low speed and CAN are two configurations). The glitch filter is built as an N-consecutive-samples stability filter (the
+  blueprint's second stage, windowed interval validation, is not). A USB low-speed receive demo runs on the dual-engine core;
+  the same program keeps up down to 8 clock cycles per bit. Receive only, no per-edge resync; see Deviation 7.
