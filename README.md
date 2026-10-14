@@ -77,3 +77,7 @@ python3 tt/tt_tool.py --create-tt-submission --ihp
   `src/pdn_macro_bridge.tcl` adds Metal3 straps and Via3 arrays; the macros
   are placed flipped in one row (`src/config.json`). `src/*.mag` is a trimmed
   abstract used only by Magic DRC (`trim_maglef.py`).
+
+## AI Usage Disclosure
+
+Claude was used to varying degrees throughout this process, primarily for tests, documentation, extended debugging sessions, and to accelerate realignment with the correct target. The assembler and loader (`tools/tdasm`) was written by Claude, in Axiom, and verified against the hardware's own test vectors. The majority of the chip's code is human written, with AI verification and review to prevent compounding failures and facilitate a better outcome than solo execution could have produced.
