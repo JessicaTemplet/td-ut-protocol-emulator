@@ -81,6 +81,7 @@ module I = struct
     byte_sel   : 'a;
     go         : 'a;
     engine_sel : 'a;
+    cfg_sel    : 'a;
   } [@@deriving sexp_of, hardcaml]
 end
 
@@ -94,6 +95,7 @@ module O = struct
     checksum              : 'a; [@bits 8]
     run                   : 'a;
     prescale               : 'a; [@bits 8]
+    bp_cfg                : 'a; [@bits 72]
   } [@@deriving sexp_of, hardcaml]
 end
 
@@ -112,8 +114,27 @@ let create (inputs : Signal.t I.t) =
   let run = wire 1 in
   let not_run = ~:run in
 
+  (* Optional configuration path (bit pipe + glitch filter, see bitpipe.ml):
+     while `cfg_sel` is high a strobe writes the next of 9 config bytes
+     instead of a prescale byte or program word. Hosts that never raise
+     cfg_sel (every existing test and program) see no change at all. *)
+  let cfg_sel = inputs.cfg_sel in
+  let cfg_write = strobe_edge &&: not_run &&: cfg_sel in
+  let cfg_idx = wire 4 in
+  cfg_idx
+  <== reg_fb ~enable:(one 1) spec ~width:4 ~f:(fun cur ->
+        mux2 (cfg_write &&: (cur <>:. 15)) (cur +:. 1) cur);
+  let cfg_byte k =
+    let r = wire 8 in
+    r
+    <== reg_fb ~enable:(one 1) spec ~width:8 ~f:(fun cur ->
+          mux2 (cfg_write &&: (cfg_idx ==:. k)) inputs.data_in cur);
+    r
+  in
+  let bp_cfg = concat_msb (List.rev (List.init Bitpipe.cfg_bytes cfg_byte)) in
+
   let prescale_loaded = wire 1 in
-  let load_prescale = strobe_edge &&: not_run &&: (~:prescale_loaded) in
+  let load_prescale = strobe_edge &&: not_run &&: (~:cfg_sel) &&: (~:prescale_loaded) in
 
   prescale_loaded
   <== reg_fb ~enable:(one 1) spec ~width:1 ~f:(fun cur -> cur |: load_prescale);
@@ -127,10 +148,10 @@ let create (inputs : Signal.t I.t) =
   byte_lo
   <== reg_fb ~enable:(one 1) spec ~width:8 ~f:(fun cur ->
         mux2
-          (strobe_edge &&: (~:(inputs.byte_sel)) &&: not_run &&: prescale_loaded)
+          (strobe_edge &&: (~:(inputs.byte_sel)) &&: not_run &&: prescale_loaded &&: (~:cfg_sel))
           inputs.data_in cur);
 
-  let commit = strobe_edge &&: inputs.byte_sel &&: not_run &&: prescale_loaded in
+  let commit = strobe_edge &&: inputs.byte_sel &&: not_run &&: prescale_loaded &&: (~:cfg_sel) in
   let commit_phys = commit &&: (~:(inputs.engine_sel)) in
   let commit_protocol = commit &&: inputs.engine_sel in
   let word = concat_msb [ inputs.data_in; byte_lo ] in
@@ -148,7 +169,8 @@ let create (inputs : Signal.t I.t) =
   let checksum = wire 8 in
   checksum
   <== reg_fb ~enable:(one 1) spec ~width:8 ~f:(fun cur ->
-        mux2 commit (cur ^: select word 15 8 ^: select word 7 0) cur);
+        mux2 commit (cur ^: select word 15 8 ^: select word 7 0)
+          (mux2 cfg_write (cur ^: inputs.data_in) cur));
 
   run <== reg_fb ~enable:(one 1) spec ~width:1 ~f:(fun cur -> cur |: go_edge);
 
@@ -160,4 +182,5 @@ let create (inputs : Signal.t I.t) =
   ; checksum
   ; run
   ; prescale
+  ; bp_cfg
   }

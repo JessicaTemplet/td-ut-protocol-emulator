@@ -84,6 +84,7 @@ module I = struct
     protocol_write_enable : 'a;
     protocol_write_addr   : 'a; [@bits 9]
     protocol_write_data   : 'a; [@bits 16]
+    bp_cfg                : 'a; [@bits 72]
   } [@@deriving sexp_of, hardcaml]
 end
 
@@ -110,11 +111,24 @@ end
    through the hard-macro path). *)
 let create_generic ~engine_create ~protocol_create (inputs : Signal.t I.t) =
   let push_stall = wire 1 in
+  (* Per-pin glitch filter on the shared pin bus, configured by byte 1
+     bits [7:4] of the bit-pipe config (0 = bypass, so invisible unless a
+     program's config asks for it). Both engines see the filtered pins. *)
+  let pins_in =
+    (Glitch_filter.create
+       { Glitch_filter.I.clk = inputs.clk
+       ; rst_n = inputs.rst_n
+       ; run = inputs.run
+       ; pins_in = inputs.pins_in
+       ; n = select inputs.bp_cfg 15 12
+       }).Glitch_filter.O.pins_out
+  in
   let engine_out =
     engine_create
       { Engine.I.clk = inputs.clk
       ; rst_n = inputs.rst_n
-      ; pins_in = inputs.pins_in
+      ; pins_in
+      ; bp_cfg = inputs.bp_cfg
       ; prescale = inputs.prescale
       ; run = inputs.run
       ; write_enable = inputs.phys_write_enable
@@ -148,7 +162,7 @@ let create_generic ~engine_create ~protocol_create (inputs : Signal.t I.t) =
     protocol_create
       { Protocol_engine.I.clk = inputs.clk
       ; rst_n = inputs.rst_n
-      ; pins_in = inputs.pins_in
+      ; pins_in
       ; run = inputs.protocol_run
       ; write_enable = inputs.protocol_write_enable
       ; write_addr = inputs.protocol_write_addr

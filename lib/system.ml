@@ -82,6 +82,7 @@ let create_generic ~engine_create (inputs : Signal.t I.t) =
       ; write_addr = loader_out.Loader.O.write_addr
       ; write_data = loader_out.Loader.O.write_data
       ; push_stall = gnd (* single-engine path, no FIFO to stall on -- see dual.ml *)
+      ; bp_cfg = zero Bitpipe.cfg_bits (* single-engine path: bit pipe unconfigured (all stages off) *)
       }
   in
   { O.sample_pulse = engine_out.Engine.O.sample_pulse

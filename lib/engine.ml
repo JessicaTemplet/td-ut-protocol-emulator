@@ -87,7 +87,29 @@ open Signal
                the exact same FIFO/backpressure path byte-relay already
                proved out; µE1 can already pop and inspect these
                16-bit words with its existing FIFO_POP/BRANCH_COND_WORD
-               opcodes with no changes needed there.)
+               opcodes with no changes needed there.
+
+               `mode`=1 is further split by payload[9:8] (CAPTURE is
+               sub-op 0 and keeps payload 0, so every existing program is
+               untouched). Sub-ops 1-3 drive the BIT PIPE (bitpipe.ml):
+                 1 PIPE_BIT    sample the selected pin and run it through
+                               NRZI decode, bit un-stuffing, CRC and byte
+                               assembly; a completed byte is pushed to the
+                               FIFO through the same port as a pushing
+                               SHIFT_IO (stalls while the FIFO is full).
+                               Everything protocol-specific (NRZI on/off,
+                               stuff rule, CRC polynomial/width/reflection,
+                               residue, bytes to skip) is config loaded once
+                               through the loader's cfg_sel path, so one
+                               instruction per bit replaces the ~10 a
+                               software bit-banger needs for USB / CAN.
+                 2 PIPE_STATUS push a status word {1, bytes, 5'b0, aligned,
+                               stuff_err, crc_ok} to the FIFO (bit 15 marks
+                               it so the protocol engine can tell it from
+                               a zero-extended data byte).
+                 3 PIPE_CTRL   payload[0] reset the stream, payload[1] idle
+                               line level for NRZI, payload[2] reload the
+                               CRC only.)
    opcode 11 = BRANCH_COND  (single-cycle, always advances the fetch
                stage; payload's low pc_width bits are a branch
                target. Condition is a level check against the SAME
@@ -201,6 +223,7 @@ module I = struct
     write_addr   : 'a; [@bits 9]
     write_data   : 'a; [@bits 16]
     push_stall   : 'a;
+    bp_cfg       : 'a; [@bits 72]
   } [@@deriving sexp_of, hardcaml]
 end
 
@@ -246,6 +269,28 @@ let shift_in_push ~pin = encode ~opcode:2 ~pin ~mode:0 ~payload:1
    pushes a timestamped {pin_sel, level, elapsed} record; payload is
    unused/reserved. *)
 let capture ~pin = encode ~opcode:2 ~pin ~mode:1 ~payload:0
+
+(* Bit-pipe operations (see bitpipe.ml): SHIFT_IO with mode=1 and a sub-op in
+   payload[9:8]. Sub-op 0 is CAPTURE, unchanged, so every existing program
+   (which encodes payload 0) is untouched. *)
+let pipe_sub sub ~pin ~ops = encode ~opcode:2 ~pin ~mode:1 ~payload:((sub lsl 8) lor ops)
+
+(* PIPE_BIT: sample `pin` and run the sample through NRZI decode, un-stuffing,
+   CRC and byte assembly. A completed byte is pushed to the FIFO (stalling
+   while the FIFO is full). *)
+let pipe_bit ~pin = pipe_sub 1 ~pin ~ops:0
+
+(* PIPE_STATUS: push one 16-bit status record {1, bytes[6:0], 5'b0,
+   aligned, stuff_err, crc_ok} to the FIFO. Bit 15 marks it as a status
+   word (data bytes are zero-extended). *)
+let pipe_status = pipe_sub 2 ~pin:0 ~ops:0
+
+(* PIPE_CTRL: [reset] clears the stream state and loads the idle line level
+   `prev_level` for NRZI; [crc_init] reloads only the CRC (USB: the CRC covers
+   the data stage, not SYNC/PID). *)
+let pipe_ctrl ~reset ~prev_level ~crc_init =
+  pipe_sub 3 ~pin:0
+    ~ops:((if reset then 1 else 0) lor (if prev_level then 2 else 0) lor if crc_init then 4 else 0)
 
 let branch_cond ~pin ~branch_if_high ~target =
   encode ~opcode:3 ~pin ~mode:(if branch_if_high then 1 else 0) ~payload:target
@@ -346,7 +391,11 @@ let create_generic ~build_instr (inputs : Signal.t I.t) =
   (* SHIFT_IO's mode bit: 0 = normal byte-accumulate (every pre-existing
      program), 1 = CAPTURE (new this session) -- see the module-header
      note. Mutually exclusive by construction (mode is a single bit). *)
-  let is_capture = is_shift &&: mode in
+  let pipe_sub_op = select payload 9 8 in
+  let is_capture = is_shift &&: mode &&: (pipe_sub_op ==:. 0) in
+  let is_pipe_bit = is_shift &&: mode &&: (pipe_sub_op ==:. 1) in
+  let is_pipe_status = is_shift &&: mode &&: (pipe_sub_op ==:. 2) in
+  let is_pipe_ctrl = is_shift &&: mode &&: (pipe_sub_op ==:. 3) in
   let is_normal_shift = is_shift &&: (~:mode) in
 
   (* Input pin mux: 1-of-8, selected by the current instruction's
@@ -388,7 +437,26 @@ let create_generic ~build_instr (inputs : Signal.t I.t) =
      module-header note on SHIFT_IO. Every other case (EMIT_STATE,
      BRANCH_COND, a non-pushing SHIFT_IO) is single-cycle and always
      advances while running. *)
-  let would_push = (is_normal_shift &&: payload_bit0) ||: is_capture in
+  (* Bit pipe (bitpipe.ml). `advance` is a forward wire, so `step` can depend
+     on it while `would_push` (registered state only) feeds back into it
+     without a combinational loop. *)
+  let bp =
+    Bitpipe.create
+      { Bitpipe.I.clk = inputs.clk
+      ; rst_n = inputs.rst_n
+      ; cfg = inputs.bp_cfg
+      ; step = advance &&: is_pipe_bit
+      ; line = rx_pin
+      ; ctrl_reset = advance &&: is_pipe_ctrl &&: payload_bit0
+      ; ctrl_crc_init = advance &&: is_pipe_ctrl &&: select payload 2 2
+      ; prev_init = select payload 1 1
+      }
+  in
+  let would_push =
+    (is_normal_shift &&: payload_bit0)
+    ||: is_capture ||: is_pipe_status
+    ||: (is_pipe_bit &&: bp.Bitpipe.O.would_push)
+  in
   let shift_advance_ok = ~:(would_push &&: inputs.push_stall) in
   advance <== (inputs.run &&: mux2 is_wait wait_condition shift_advance_ok);
 
@@ -434,7 +502,9 @@ let create_generic ~build_instr (inputs : Signal.t I.t) =
       mux2 shift_advances (concat_msb [ select cur 6 0; rx_pin ]) cur)
   in
   let next_shift = concat_msb [ select shift_reg 6 0; rx_pin ] in
-  let byte_ready_now = shift_advances &&: payload_bit0 in
+  (* a completed PIPE_BIT byte shares the same push port as shift_in_push *)
+  let pipe_byte_done = bp.Bitpipe.O.byte_done in
+  let byte_ready_now = (shift_advances &&: payload_bit0) ||: pipe_byte_done in
 
   (* `byte_ready`/`byte_data` are REGISTERED (plain one-cycle
      pipeline regs, not reg_fb -- no holding needed, a completing push
@@ -460,7 +530,7 @@ let create_generic ~build_instr (inputs : Signal.t I.t) =
      was caught by test_engine_push.ml comparing against pc_before and
      getting an apparently-one-instruction-early result before the fix. *)
   let byte_ready = reg spec byte_ready_now in
-  let byte_data = reg spec next_shift in
+  let byte_data = reg spec (mux2 pipe_byte_done bp.Bitpipe.O.byte_data next_shift) in
 
   (* CAPTURE datapath: `elapsed` is a free-running 12-bit counter,
      incremented once per running cycle, reset to 0 the same cycle a
@@ -482,8 +552,11 @@ let create_generic ~build_instr (inputs : Signal.t I.t) =
       mux2 capture_now (zero 12)
         (mux2 (inputs.run &&: (~:(cur ==:. 0xFFF))) (cur +:. 1) cur));
   let capture_data_now = concat_msb [ pin_sel; rx_pin; elapsed ] in
-  let capture_ready = reg spec capture_now in
-  let capture_data = reg spec capture_data_now in
+  (* PIPE_STATUS pushes through the same registered push port as CAPTURE;
+     it does not touch the capture `elapsed` counter. *)
+  let status_now = advance &&: is_pipe_status in
+  let capture_ready = reg spec (capture_now ||: status_now) in
+  let capture_data = reg spec (mux2 status_now bp.Bitpipe.O.status capture_data_now) in
 
   { O.sample_pulse = inputs.run &&: is_shift
   ; sampled_bit = rx_pin
