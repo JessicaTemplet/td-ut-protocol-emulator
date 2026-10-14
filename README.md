@@ -17,7 +17,7 @@ generated. Architecture, design history and the plan are in the documents below.
 * [`tools/tdasm/`](tools/tdasm/): the assembler and program loader, with the instruction set for both engines and example
   programs (SPI master, I2C master read, USB low-speed receive). It writes the load sequence for a host and vectors cocotb can
   replay. Written in [Axiom](https://github.com/chrispaig3/Axiom).
-* The detailed working log (every bug and measurement) is the git history of `ROADMAP.md`: `git log -p -- ROADMAP.md`.
+* The detailed build log (every bug and measurement) is the "Build log" section of `ROADMAP.md`.
 
 ## What is verified, and how
 
