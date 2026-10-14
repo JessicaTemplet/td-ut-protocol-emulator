@@ -1,0 +1,6 @@
+# The Tiny Tapeout gl_test action installs Python packages from
+# test/requirements.txt regardless of its test-dir input. The cocotb bench
+# lives in gl_test/ (test/ holds the Hardcaml Cyclesim suites), so this file
+# mirrors gl_test/requirements.txt to make CI use the same cocotb as local runs.
+pytest==8.4.2
+cocotb==2.0.1

@@ -36,3 +36,9 @@ formal/fifo/
 
 # Built tdasm binary (tools/tdasm/test.sh rebuilds it).
 /tools/tdasm/tdasm
+
+# Local hardening output (CI produces its own as an artifact), and stray
+# waveforms, as in the Tiny Tapeout template.
+/tt_submission/
+*.vcd
+*.fst

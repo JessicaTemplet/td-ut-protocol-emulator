@@ -1,4 +1,5 @@
 {
+  "RUN_CTS": 1,
   "CLOCK_PORT": "clk",
   "//": "period is in ns; 20ns == 50MHz, matching info.yaml's clock_hz and the design's target clock",
   "CLOCK_PERIOD": 20,
