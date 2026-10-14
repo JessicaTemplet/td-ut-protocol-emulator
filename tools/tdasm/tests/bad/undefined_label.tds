@@ -1,0 +1,3 @@
+.prescale 0
+.phys
+  br_high 0 nowhere

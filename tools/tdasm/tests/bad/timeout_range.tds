@@ -1,0 +1,3 @@
+.prescale 0
+.phys
+  wait_fall 0 1024

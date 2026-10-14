@@ -1,0 +1,84 @@
+; SPI master: send 0xA5 on MOSI, read a byte on MISO, then flag its MSB.
+; Same program as gen_vectors.ml's spi_master_prog / protocol_prog.
+;   uio pins: 0 SCLK, 1 MOSI, 2 MISO, 3 CS_n, 4 DATA_FLAG
+
+.prescale 0
+
+.phys                      ; uE0: bit-level SPI master
+        emit 3 0           ; CS_n low
+        wait_fall 0 4      ; half SCLK period (4 ticks)
+
+        ; bit 7 = 1
+        emit 1 1           ; MOSI
+        wait_fall 0 4
+        emit 0 1           ; SCLK high
+        shift 2            ; sample MISO
+        wait_fall 0 4
+        emit 0 0           ; SCLK low
+
+        ; bit 6 = 0
+        emit 1 0           ; MOSI
+        wait_fall 0 4
+        emit 0 1           ; SCLK high
+        shift 2            ; sample MISO
+        wait_fall 0 4
+        emit 0 0           ; SCLK low
+
+        ; bit 5 = 1
+        emit 1 1           ; MOSI
+        wait_fall 0 4
+        emit 0 1           ; SCLK high
+        shift 2            ; sample MISO
+        wait_fall 0 4
+        emit 0 0           ; SCLK low
+
+        ; bit 4 = 0
+        emit 1 0           ; MOSI
+        wait_fall 0 4
+        emit 0 1           ; SCLK high
+        shift 2            ; sample MISO
+        wait_fall 0 4
+        emit 0 0           ; SCLK low
+
+        ; bit 3 = 0
+        emit 1 0           ; MOSI
+        wait_fall 0 4
+        emit 0 1           ; SCLK high
+        shift 2            ; sample MISO
+        wait_fall 0 4
+        emit 0 0           ; SCLK low
+
+        ; bit 2 = 1
+        emit 1 1           ; MOSI
+        wait_fall 0 4
+        emit 0 1           ; SCLK high
+        shift 2            ; sample MISO
+        wait_fall 0 4
+        emit 0 0           ; SCLK low
+
+        ; bit 1 = 0
+        emit 1 0           ; MOSI
+        wait_fall 0 4
+        emit 0 1           ; SCLK high
+        shift 2            ; sample MISO
+        wait_fall 0 4
+        emit 0 0           ; SCLK low
+
+        ; bit 0 = 1
+        emit 1 1           ; MOSI
+        wait_fall 0 4
+        emit 0 1           ; SCLK high
+        shift_push 2       ; sample MISO, hand the byte to uE1
+        wait_fall 0 4
+        emit 0 0           ; SCLK low
+
+        emit 3 1           ; CS_n high
+        halt               ; never fall into unwritten SRAM
+
+.protocol                  ; uE1: DATA_FLAG = MSB of the received byte
+        pop                ; wait for uE0's byte
+        br_bit1 7 high
+        emit 4 0
+        br_bit0 7 done
+high:   emit 4 1
+done:   pop                ; park: the FIFO stays empty

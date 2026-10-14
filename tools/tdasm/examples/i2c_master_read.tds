@@ -1,0 +1,165 @@
+; I2C master read: address 0x5A + R (0xB5), ACK check, read one byte,
+; then STOP. Same program as gen_vectors.ml's i2c_master_read_prog.
+;   uio pins: 0 SDA, 1 SCL, 2 DATA_FLAG. SDA/SCL are open-drain:
+;   `release` lets the pull-up take the line high, `emit P 0` drives low.
+
+.prescale 0
+
+.phys
+        release 0          ; idle: SDA and SCL high
+        release 1
+        wait_fall 0 4
+        emit 0 0           ; START: SDA falls while SCL is high
+        wait_fall 0 4
+        emit 1 0
+
+        ; address/RW bit 7 = 1
+        release 0
+        wait_fall 0 4
+        release 1          ; SCL high
+        wait_fall 0 4
+        emit 1 0           ; SCL low
+
+        ; address/RW bit 6 = 0
+        emit 0 0
+        wait_fall 0 4
+        release 1          ; SCL high
+        wait_fall 0 4
+        emit 1 0           ; SCL low
+
+        ; address/RW bit 5 = 1
+        release 0
+        wait_fall 0 4
+        release 1          ; SCL high
+        wait_fall 0 4
+        emit 1 0           ; SCL low
+
+        ; address/RW bit 4 = 1
+        release 0
+        wait_fall 0 4
+        release 1          ; SCL high
+        wait_fall 0 4
+        emit 1 0           ; SCL low
+
+        ; address/RW bit 3 = 0
+        emit 0 0
+        wait_fall 0 4
+        release 1          ; SCL high
+        wait_fall 0 4
+        emit 1 0           ; SCL low
+
+        ; address/RW bit 2 = 1
+        release 0
+        wait_fall 0 4
+        release 1          ; SCL high
+        wait_fall 0 4
+        emit 1 0           ; SCL low
+
+        ; address/RW bit 1 = 0
+        emit 0 0
+        wait_fall 0 4
+        release 1          ; SCL high
+        wait_fall 0 4
+        emit 1 0           ; SCL low
+
+        ; address/RW bit 0 = 1
+        release 0
+        wait_fall 0 4
+        release 1          ; SCL high
+        wait_fall 0 4
+        emit 1 0           ; SCL low
+
+        ; ACK slot: a NACK (SDA still high) goes straight to STOP
+        release 0
+        wait_fall 0 4
+        release 1
+        wait_fall 0 4
+        br_high 0 stop
+        emit 1 0
+
+        ; data bit 7
+        release 0
+        wait_fall 0 4
+        release 1
+        shift 0
+        wait_fall 0 4
+        emit 1 0
+
+        ; data bit 6
+        release 0
+        wait_fall 0 4
+        release 1
+        shift 0
+        wait_fall 0 4
+        emit 1 0
+
+        ; data bit 5
+        release 0
+        wait_fall 0 4
+        release 1
+        shift 0
+        wait_fall 0 4
+        emit 1 0
+
+        ; data bit 4
+        release 0
+        wait_fall 0 4
+        release 1
+        shift 0
+        wait_fall 0 4
+        emit 1 0
+
+        ; data bit 3
+        release 0
+        wait_fall 0 4
+        release 1
+        shift 0
+        wait_fall 0 4
+        emit 1 0
+
+        ; data bit 2
+        release 0
+        wait_fall 0 4
+        release 1
+        shift 0
+        wait_fall 0 4
+        emit 1 0
+
+        ; data bit 1
+        release 0
+        wait_fall 0 4
+        release 1
+        shift 0
+        wait_fall 0 4
+        emit 1 0
+
+        ; data bit 0
+        release 0
+        wait_fall 0 4
+        release 1
+        shift_push 0       ; last bit: hand the byte to uE1
+        wait_fall 0 4
+        emit 1 0
+
+        ; master NACK: leave SDA released for the ninth clock
+        release 0
+        wait_fall 0 4
+        release 1
+        wait_fall 0 4
+        emit 1 0
+
+stop:   emit 0 0           ; STOP: SDA rises while SCL is high
+        wait_fall 0 4
+        release 1
+        wait_fall 0 4
+        release 0
+        wait_fall 0 4
+        halt
+
+.protocol                  ; uE1: DATA_FLAG = MSB of the byte read
+        pop
+        br_bit1 7 high
+        emit 2 0
+        br_bit0 7 done
+high:   emit 2 1
+done:   pop
