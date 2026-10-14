@@ -14,6 +14,9 @@ generated. Architecture, design history and the plan are in the documents below.
 * [`docs/design/design_blueprint.txt`](docs/design/design_blueprint.txt): the original architecture, with as-built revision notes.
 * [`docs/design/design_rationale.txt`](docs/design/design_rationale.txt): why it is built this way, and every major change of direction
   (wrong-process retarget, flip-flop RAM, macro power, verification).
+* [`tools/tdasm/`](tools/tdasm/): the assembler and program loader, with the instruction set for both engines and example
+  programs (SPI master, I2C master read, USB low-speed receive). It writes the load sequence for a host and vectors cocotb can
+  replay. Written in [Axiom](https://github.com/chrispaig3/Axiom).
 * The detailed working log (every bug and measurement) is the git history of `ROADMAP.md`: `git log -p -- ROADMAP.md`.
 
 ## What is verified, and how
@@ -28,8 +31,9 @@ generated. Architecture, design history and the plan are in the documents below.
 | Same bench, gate level | The hardened netlist behaves like the RTL. | `./run_gl_test.sh gates` after copying the netlist to `gl_test/gate_level_netlist.v` |
 | Physical (LibreLane via `tt_tool.py`) | Synthesis, PDN, routing, LVS, Magic DRC, antenna, timing. | see below |
 | TT precheck | KLayout `ihp-sg13cmos5l.drc` deck and the pin/boundary checks on the final GDS. | see below |
+| Assembler (`tools/tdasm/`) | The SPI, I2C and USB example sources assemble to exactly the prescale, config bytes and words in `gl_test/*_vectors.json`, and nine malformed sources are each refused with the right error. Needs the Axiom compiler, so it is not part of `run_regression.sh`. | `tools/tdasm/test.sh` |
 
-`gl_test/{spi,i2c}_vectors.json` are generated from the Hardcaml microcode
+`gl_test/{spi,i2c,usb}_vectors.json` are generated from the Hardcaml microcode
 (`./run_gen_vectors.sh`); `run_regression.sh` fails if the committed copies are
 stale.
 

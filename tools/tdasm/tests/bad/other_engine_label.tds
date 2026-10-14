@@ -1,0 +1,5 @@
+.prescale 0
+.phys
+x: emit 0 1
+.protocol
+  br_high 0 x

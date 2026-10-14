@@ -30,3 +30,9 @@ formal/shadow_fifo.v
 formal/fifo_prove/
 formal/fifo_cover/
 formal/fifo/
+
+# run_regression.sh keeps each step's full output here (cleared every run).
+/regress_logs/
+
+# Built tdasm binary (tools/tdasm/test.sh rebuilds it).
+/tools/tdasm/tdasm

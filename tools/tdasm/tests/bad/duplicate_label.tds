@@ -1,0 +1,4 @@
+.prescale 0
+.phys
+a: emit 0 1
+a: emit 0 0
