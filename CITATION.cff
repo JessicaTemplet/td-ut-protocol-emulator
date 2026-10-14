@@ -11,6 +11,7 @@ abstract: >-
 authors:
   - family-names: Templet
     given-names: Jessica
+    orcid: "https://orcid.org/0009-0009-1513-729X"
 repository-code: "https://github.com/JessicaTemplet/td-ut-protocol-emulator"
 license: Apache-2.0
 keywords:
