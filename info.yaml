@@ -33,7 +33,7 @@ pinout:
   uio[1]: "byte_sel (pre-run) / shared engine input pin 1 (post-run)"
   uio[2]: "go (pre-run) / shared engine input pin 2 (post-run)"
   uio[3]: "engine_sel: 0=uE0/phys, 1=uE1/protocol (pre-run) / shared engine input pin 3 (post-run)"
-  uio[4]: "unused (pre-run) / shared engine input pin 4 (post-run)"
+  uio[4]: "cfg_sel: 1 = strobes write bit-pipe/glitch-filter config bytes (pre-run) / shared engine input pin 4 (post-run)"
   uio[5]: "unused (pre-run) / shared engine input pin 5 (post-run)"
   uio[6]: "unused (pre-run) / shared engine input pin 6 (post-run)"
   uio[7]: "unused (pre-run) / shared engine input pin 7 (post-run)"

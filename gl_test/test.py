@@ -30,17 +30,17 @@ def vectors(name):
         return json.load(f)
 
 
-def uio(strobe=0, byte_sel=0, go=0, engine_sel=0):
-    return (engine_sel << 3) | (go << 2) | (byte_sel << 1) | strobe
+def uio(strobe=0, byte_sel=0, go=0, engine_sel=0, cfg_sel=0):
+    return (cfg_sel << 4) | (engine_sel << 3) | (go << 2) | (byte_sel << 1) | strobe
 
 
-async def pulse_byte(dut, engine_sel, byte_sel, data):
+async def pulse_byte(dut, engine_sel, byte_sel, data, cfg_sel=0):
     dut.ui_in.value = data
-    dut.uio_in.value = uio(0, byte_sel, 0, engine_sel)
+    dut.uio_in.value = uio(0, byte_sel, 0, engine_sel, cfg_sel)
     await ClockCycles(dut.clk, 3)
-    dut.uio_in.value = uio(1, byte_sel, 0, engine_sel)
+    dut.uio_in.value = uio(1, byte_sel, 0, engine_sel, cfg_sel)
     await ClockCycles(dut.clk, 3)
-    dut.uio_in.value = uio(0, byte_sel, 0, engine_sel)
+    dut.uio_in.value = uio(0, byte_sel, 0, engine_sel, cfg_sel)
     await ClockCycles(dut.clk, 3)
 
 
@@ -59,11 +59,16 @@ async def load_and_go(dut, vec):
     """Load both programs over the pins, check the checksum, pulse go."""
     await reset(dut)
     await pulse_byte(dut, 0, 0, vec["prescale"])  # first strobe after reset = prescale
+    # optional bit-pipe / glitch-filter configuration (uio[4] = cfg_sel)
+    for byte in vec.get("cfg", []):
+        await pulse_byte(dut, 0, 0, byte, cfg_sel=1)
     for engine_sel, prog in ((0, vec["phys"]), (1, vec["protocol"])):
         for w in prog:
             await pulse_byte(dut, engine_sel, 0, w & 0xFF)
             await pulse_byte(dut, engine_sel, 1, (w >> 8) & 0xFF)
     expected = 0
+    for byte in vec.get("cfg", []):
+        expected ^= byte
     for w in vec["phys"] + vec["protocol"]:
         expected ^= (w & 0xFF) ^ ((w >> 8) & 0xFF)
     await Timer(1, "ns")
@@ -117,6 +122,48 @@ async def spi_master_through_real_pins(dut):
     expected_flag = (vec["slave_tx_byte"] >> 7) & 1
     assert (oe >> flag_pin) & 1 == 1, "DATA_FLAG pin is not driven"
     assert (out >> flag_pin) & 1 == expected_flag, "DATA_FLAG level wrong"
+
+
+async def usb_packet(dut, symbols):
+    """Load the USB receive program + bit-pipe config over the pins (cfg_sel),
+    play `symbols` (1 = J, 0 = K, 2 = SE0, one per bit period) on D-/D+
+    (uio[0], uio[1]) and return (flag_ok, flag_done) read off uio_out."""
+    vec = vectors("usb_vectors.json")
+    pin = vec["pins"]
+    await load_and_go(dut, vec)
+    b, lead = vec["b"], vec["lead"]
+    total = lead + len(symbols) * b + 400
+    for cyc in range(total):
+        if cyc < lead:
+            s = 1
+        else:
+            k = (cyc - lead) // b
+            s = symbols[k] if k < len(symbols) else 1
+        dm = 1 if s == 1 else 0
+        dp = 1 if s == 0 else 0
+        dut.uio_in.value = (dm << pin["dm"]) | (dp << pin["dp"])
+        await RisingEdge(dut.clk)
+        await Timer(1, "ns")
+        resolved(dut, cyc, total)
+    out, oe = int(dut.uio_out.value), int(dut.uio_oe.value)
+    flag = lambda p: ((oe >> p) & 1 == 1, (out >> p) & 1 == 1)
+    return flag(pin["flag_ok"]), flag(pin["flag_done"])
+
+
+@cocotb.test()
+async def usb_low_speed_receive_good_packet(dut):
+    vec = vectors("usb_vectors.json")
+    ok, done = await usb_packet(dut, vec["good_symbols"])
+    assert done == (True, True), f"flag_done not driven high: {done}"
+    assert ok == (True, True), f"good USB packet (bit pipe: NRZI, unstuff, CRC16) not accepted: {ok}"
+
+
+@cocotb.test()
+async def usb_low_speed_receive_corrupted_packet(dut):
+    vec = vectors("usb_vectors.json")
+    ok, done = await usb_packet(dut, vec["bad_symbols"])
+    assert done == (True, True), f"flag_done not driven high: {done}"
+    assert ok == (True, False), f"corrupted USB packet was not rejected: {ok}"
 
 
 @cocotb.test()

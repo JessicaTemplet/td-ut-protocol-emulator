@@ -104,7 +104,9 @@ let emit_state ~pin ~level = encode ~opcode:1 ~pin ~mode:(if level then 1 else 0
 let release_pin ~pin = encode ~opcode:1 ~pin ~mode:0 ~payload:1
 
 let branch_word ~bit ~branch_if_one ~target =
-  encode ~opcode:2 ~pin:bit ~mode:(if branch_if_one then 1 else 0) ~payload:target
+  (* bit 0-7 lives in the pin field; bits 8-15 set payload[9] (above the 9-bit target) *)
+  encode ~opcode:2 ~pin:(bit land 7) ~mode:(if branch_if_one then 1 else 0)
+    ~payload:(target lor if bit >= 8 then 0x200 else 0)
 
 let branch_pin ~pin ~branch_if_high ~target =
   encode ~opcode:3 ~pin ~mode:(if branch_if_high then 1 else 0) ~payload:target
@@ -180,8 +182,12 @@ let create_generic ~build_instr (inputs : Signal.t I.t) =
 
   let pin_inputs = List.init 8 (fun i -> select inputs.pins_in i i) in
   let rx_pin = mux pin_sel pin_inputs in
-  let rx_word_bits = List.init 8 (fun i -> select rx_word i i) in
-  let rx_word_bit = mux pin_sel rx_word_bits in
+  (* BRANCH_COND_WORD tests bit {payload[9], pin_sel} of rx_word: payload[9]
+     (unused by the 9-bit branch target, 0 in every pre-existing program)
+     selects the upper byte, so bits 8-15 are reachable too -- needed to
+     spot the bit-pipe status word (bit 15) among zero-extended data bytes. *)
+  let rx_word_bits = List.init 16 (fun i -> select rx_word i i) in
+  let rx_word_bit = mux (concat_msb [ select payload 9 9; pin_sel ]) rx_word_bits in
 
   branch_taken
   <== ((is_branch_word &&: mux2 mode rx_word_bit (~:rx_word_bit))

@@ -136,8 +136,103 @@ let i2c_protocol_prog =
     ; fifo_pop_instr
     ]
 
+(* ---- USB low-speed receive (same programs/config/timing as test_usb_rx.ml;
+   B = 32 cycles/bit, t0 = 12, t_wait = 27 from its calibration) ---- *)
+let usb_b = 32
+let usb_t0 = 12
+let usb_t_wait = 27
+let usb_dm = 0
+let usb_dp = 1
+let usb_flag_ok = 2
+let usb_flag_done = 3
+
+let usb_program =
+  Engine.
+    [ pipe_ctrl ~reset:true ~prev_level:true ~crc_init:false
+    ; wait_edge ~pin:usb_dm ~falling:true ~payload:0
+    ; wait_edge ~pin:usb_dm ~falling:true ~payload:usb_t0
+    ; branch_cond ~pin:usb_dm ~branch_if_high:false ~target:5
+    ; wait_edge ~pin:usb_dm ~falling:true ~payload:usb_t_wait
+    ; branch_cond ~pin:usb_dp ~branch_if_high:true ~target:8
+    ; branch_cond ~pin:usb_dm ~branch_if_high:true ~target:11
+    ; branch_cond ~pin:usb_dm ~branch_if_high:false ~target:13
+    ; release_pin ~pin:7
+    ; pipe_bit ~pin:usb_dm
+    ; branch_cond ~pin:usb_dm ~branch_if_high:false ~target:4
+    ; pipe_bit ~pin:usb_dm
+    ; branch_cond ~pin:usb_dm ~branch_if_high:true ~target:4
+    ; pipe_status
+    ; wait_edge ~pin:7 ~falling:true ~payload:0
+    ]
+
+let usb_protocol_prog =
+  Protocol_engine.
+    [ fifo_pop_instr
+    ; branch_word ~bit:15 ~branch_if_one:true ~target:3
+    ; branch_word ~bit:15 ~branch_if_one:false ~target:0
+    ; branch_word ~bit:0 ~branch_if_one:false ~target:8
+    ; branch_word ~bit:1 ~branch_if_one:true ~target:8
+    ; branch_word ~bit:2 ~branch_if_one:false ~target:8
+    ; emit_state ~pin:usb_flag_ok ~level:true
+    ; branch_word ~bit:15 ~branch_if_one:true ~target:9
+    ; emit_state ~pin:usb_flag_ok ~level:false
+    ; emit_state ~pin:usb_flag_done ~level:true
+    ; fifo_pop_instr
+    ]
+
+let usb_cfg_bytes =
+  let lo x = x land 0xFF and hi x = (x lsr 8) land 0xFF in
+  [ 0b011011; 6; (2 lsl 4) lor 15; lo 0xA001; hi 0xA001; lo 0xFFFF; hi 0xFFFF; lo 0xB001; hi 0xB001 ]
+
+let bits_of_byte_lsb x = List.init 8 (fun i -> (x lsr i) land 1)
+
+let usb_crc16 bytes =
+  let crc = ref 0xFFFF in
+  List.iter
+    (fun by ->
+      List.iter
+        (fun bit ->
+          let fb = (!crc land 1) lxor bit in
+          crc := !crc lsr 1;
+          if fb = 1 then crc := !crc lxor 0xA001)
+        (bits_of_byte_lsb by))
+    bytes;
+  lnot !crc land 0xFFFF
+
+let usb_stuff bits =
+  let out = ref [] and ones = ref 0 in
+  List.iter
+    (fun x ->
+      out := x :: !out;
+      if x = 1 then incr ones else ones := 0;
+      if !ones = 6 then (out := 0 :: !out; ones := 0))
+    bits;
+  List.rev !out
+
+let usb_nrzi bits =
+  let level = ref 1 in
+  List.map (fun x -> if x = 0 then level := 1 - !level; !level) bits
+
+(* symbols: 1 = J, 0 = K, 2 = SE0; ends with EOP (SE0 SE0 J) *)
+let usb_packet_symbols payload =
+  let c = usb_crc16 payload in
+  let bits =
+    bits_of_byte_lsb 0x80 @ bits_of_byte_lsb 0xC3
+    @ List.concat_map bits_of_byte_lsb (payload @ [ c land 0xFF; (c lsr 8) land 0xFF ])
+  in
+  usb_nrzi (usb_stuff bits) @ [ 2; 2; 1 ]
+
+let usb_payload = [ 0x80; 0x06; 0x00; 0x01; 0x00; 0x00; 0x40; 0x00 ] (* GET_DESCRIPTOR *)
+
 let () =
   match Array.to_list Sys.argv with
+  | [ _; "usb" ] ->
+    let good = usb_packet_symbols usb_payload in
+    let bad = List.mapi (fun i s -> if i = 36 then 1 - s else s) good in
+    Printf.printf
+      "{\n  \"prescale\": 0,\n  \"b\": %d,\n  \"lead\": 40,\n  \"cfg\": %s,\n  \"pins\": {\"dm\": %d, \"dp\": %d, \"flag_ok\": %d, \"flag_done\": %d},\n  \"phys\": %s,\n  \"protocol\": %s,\n  \"good_symbols\": %s,\n  \"bad_symbols\": %s\n}\n"
+      usb_b (json_list usb_cfg_bytes) usb_dm usb_dp usb_flag_ok usb_flag_done
+      (json_list usb_program) (json_list usb_protocol_prog) (json_list good) (json_list bad)
   | [ _; "i2c" ] ->
     (* the halt is appended after stop_addr's code, so stop_addr is unchanged *)
     assert (List.length i2c_master_read_prog - 7 = stop_addr);

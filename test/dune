@@ -113,3 +113,23 @@
  (name gen_formal_fifo)
  (modules gen_formal_fifo)
  (libraries hardcaml tt_core))
+
+(executable
+ (name test_bitpipe)
+ (modules test_bitpipe)
+ (libraries hardcaml tt_core))
+
+(executable
+ (name test_glitch_filter)
+ (modules test_glitch_filter)
+ (libraries hardcaml tt_core))
+
+(executable
+ (name test_usb_rx)
+ (modules test_usb_rx)
+ (libraries hardcaml tt_core))
+
+(executable
+ (name test_tt_um_dual_usb)
+ (modules test_tt_um_dual_usb)
+ (libraries hardcaml tt_core))
