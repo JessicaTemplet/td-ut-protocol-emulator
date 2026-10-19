@@ -28,9 +28,9 @@ caveats are listed in `docs/design/design_rationale.txt`, Deviation 7.
 | 5 | Formal verification of the FIFO | **Done for the FIFO** | SymbiYosys unbounded proof (PDR) of order/flags/drop semantics and pop-/push-liveness, with covers; plus a bounded-exhaustive check of all 4^10 sequences. System-level "no deadlock" across both engines is directed simulation on top of the proved FIFO contract. |
 | 6 | Hardware NRZI / bit-stuffing / CRC, then glitch filter | **Done** | `lib/bitpipe.ml`: one configurable unit, one `PIPE_BIT` instruction per bit (USB low speed and CAN are two configurations); `lib/glitch_filter.ml`: N-consecutive-samples filter. Checked against an independent transmitter, real USB vectors (SETUP token, GET_DESCRIPTOR CRC16), 300 random USB packets, 300 random CAN frames, all single-bit corruptions. Windowed interval validation (the blueprint's second filter stage) is not built. |
 | 7 | Demonstrate one high-speed protocol (USB low-speed or CAN) | **Done (USB low speed, receive)** | A four-instruction loop receives USB low-speed packets on the dual-engine core, through the real pins and in cocotb on the shipped Verilog. The same program keeps up down to 8 cycles per bit (6.25 Mbit/s at 50 MHz). No transmit path and no per-edge resync yet. |
-| 8 | Final synthesis and gate-budget check | **Done, with the bit pipe** | Re-hardened with the bit pipe in: 3,704 standard cells + 4 macros against a ~24k budget (was 1,926 before it). LVS, Magic DRC, route DRC and antenna 0; setup WNS +6.3 ns, hold WNS +0.11 ns; 14 max-slew (slow corner), up to 3 max-cap (SRAM output pins) and 31 max-fanout (28 of them clock-tree leaf buffers) warnings; TT precheck passes on the new GDS. |
+| 8 | Final synthesis and gate-budget check | **Done, with the bit pipe** | Re-hardened with the bit pipe in, then electrical-rule cleanup: 4,018 standard cells + 4 macros against a ~24k budget (1,926 before the bit pipe). LVS, Magic DRC, route DRC and antenna 0; setup WNS +7.3 ns, hold WNS +0.057 ns; 0 max-slew, max-cap and max-fanout at every corner; TT precheck passes on the new GDS. |
 | 9 | Freeze the tape-out target | **Done** | `tt_um_dual`. `tt_um_logic` and `tt_um_system` are still generated as tested fallbacks. |
-| 10 | Submission packaging | **Mostly done** | `info.yaml`, docs, pinout, CI workflow, README exist. Remaining: push to GitHub, green CI, submit. |
+| 10 | Submission packaging | **Mostly done** | `info.yaml`, docs, pinout, CI workflow, README exist. Pushed to GitHub; CI green on `a7efa34` (gds, precheck, gl_test, viewer). Remaining: submit. |
 
 ## Verified so far
 
@@ -39,8 +39,8 @@ caveats are listed in `docs/design/design_rationale.txt`, Deviation 7.
 - FIFO bounded-exhaustive check and SymbiYosys unbounded proof, each mutation-checked so they can fail
 - cocotb on the shipped `tt_um_dual.v` with the vendor SRAM model (SPI, I2C, USB good and corrupted packet), and on the
   hardened gate-level netlist (4/4)
-- Physical, with the bit pipe: LVS 0, Magic DRC 0, route DRC 0, antenna 0, setup WNS +6.3 ns, hold WNS +0.11 ns,
-  14 max-slew (slow corner), up to 3 max-cap and 31 max-fanout warnings (see the build log)
+- Physical, with the bit pipe: LVS 0, Magic DRC 0, route DRC 0, antenna 0, setup WNS +7.3 ns, hold WNS +0.057 ns,
+  0 max-slew, max-cap and max-fanout warnings at every corner
 - TT precheck (KLayout `ihp-sg13cmos5l` deck, pin, boundary, layer, cell-name checks): pass
 - One command re-runs everything: `./run_regression.sh`
 
@@ -332,13 +332,23 @@ pins and loader, and later in cocotb on the shipped Verilog and the hardened net
   - Max-fanout: 31 at every corner (fanout does not depend on corner) against a limit of 8. 28 are clock-tree leaf
     buffers (`clkbuf_leaf_*`) driving 11 to 19 flops each; CTS groups sinks by its own clustering rules, and clock
     slew and skew are checked separately. The other 3 are resizer-inserted `fanout*` buffers driving 10.
-  None of these block precheck. A possible tidy-up is tightening the CTS cluster size and buffering the SRAM outputs.
+  None of these block precheck. All three were cleared later (see "Electrical-rule cleanup" below).
 - Full regression with the bit pipe in: all pass, including the formal FIFO proof. One earlier regression run reported
   the formal FIFO step as failed, with the FIFO, its generator and the proof files unchanged since the last pass; the
   same proof passed on every rerun, and the cause could not be recovered because each step's log overwrote the last.
   `run_regression.sh` now keeps every step's full log in `regress_logs/` and prints the tail of any failing step. The same
   change closed a silent pass: a failed vector generator left the committed vectors untouched, so the stale-vector
   check compared them against themselves and passed.
+- Electrical-rule cleanup (`src/config.json`, comment `//0d`): all max-slew, max-cap and max-fanout warnings to 0 at
+  every corner. Fanout: `MAX_FANOUT_CONSTRAINT` 10 → 8 (the stdcell libs' `default_max_fanout`) and
+  `CTS_SINK_CLUSTERING_SIZE` 8. Slew/cap: the four macros sit in one row along the die bottom, so SRAM nets are long
+  (µE1's write enable was 913 µm on one `buf_1`, most address/data nets 550–900 µm), and hold fixing puts weak
+  `dlygate4sd3_1` cells in front of the address pins, each then driving ~300 µm. Took four runs, each fixing one layer:
+  post-GRT design repair with wider margins cleared cap and fanout but left 18 slew; a 300 µm max wire length fixed
+  the 913 µm net; a 50% post-GRT slew margin (global-route estimates under-call these routed slews by ~1.5–2×)
+  cleared µE1, leaving 12 on µE0; a 200 µm max wire length cleared the rest. Final, via `tt_tool.py --harden`: 4,018
+  standard cells + 4 macros (+314), setup WNS +7.34 ns, hold WNS +0.057 ns, 2.01 mW (+0.26), worst IR drop 2.1 mV (0.17%),
+  LVS/Magic DRC/route DRC/antenna 0, TT precheck passes, gate-level cocotb 4/4.
 
 ## 8. Toolchain: `tdasm`
 
