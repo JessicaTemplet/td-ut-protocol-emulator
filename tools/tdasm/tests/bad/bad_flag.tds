@@ -1,0 +1,3 @@
+.prescale 0
+.protocol
+  tx_push 0x41 first

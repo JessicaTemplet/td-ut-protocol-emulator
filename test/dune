@@ -133,3 +133,23 @@
  (name test_tt_um_dual_usb)
  (modules test_tt_um_dual_usb)
  (libraries hardcaml tt_core))
+
+(executable
+ (name test_txpipe)
+ (modules test_txpipe)
+ (libraries hardcaml tt_core))
+
+(executable
+ (name test_dual_tx)
+ (modules test_dual_tx)
+ (libraries hardcaml tt_core))
+
+(executable
+ (name test_usb_transaction)
+ (modules test_usb_transaction)
+ (libraries hardcaml tt_core))
+
+(executable
+ (name test_tt_um_dual_usb_tx)
+ (modules test_tt_um_dual_usb_tx)
+ (libraries hardcaml tt_core))

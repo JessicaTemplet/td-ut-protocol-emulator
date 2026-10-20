@@ -1,6 +1,6 @@
 # Roadmap: TD-µT protocol emulator (Tiny Tapeout, IHP CMOS5L)
 
-Status as of 2026-10-13. Deadline: **2027-01-18**. Target: `tt_um_dual`, 6x4 tiles, IHP `ihp-sg13cmos5l`.
+Status as of 2026-10-20. Deadline: **2027-01-18**. Target: `tt_um_dual`, 6x4 tiles, IHP `ihp-sg13cmos5l`.
 
 The step-by-step record of the build (every bug, dead end and measurement) is the **Build log** section at the end
 of this file. Reasons behind the larger changes of direction are in `docs/design/design_rationale.txt`; the original
@@ -14,8 +14,14 @@ end**: hardened with `tt_tool.py`, LVS / Magic DRC / route DRC / antenna / power
 violations, TT precheck passes, and the gate-level netlist passes the same testbench as the RTL.
 
 The part of the original pitch that goes beyond UART/SPI/I2C is built too: a generic hardware bit pipe (NRZI,
-bit-stuffing, CRC), a glitch filter, and a USB low-speed receive demo (items 6 and 7 below). It is receive-only, and the
-caveats are listed in `docs/design/design_rationale.txt`, Deviation 7.
+bit-stuffing, CRC), a glitch filter, and a USB low-speed receive demo (items 6 and 7 below); caveats in
+`docs/design/design_rationale.txt`, Deviation 7.
+
+**In progress (not yet hardened):** the next features from `design_note_tx_clock_recovery.md`, built together so the
+chip is re-hardened once. Done so far: a transmit path that mirrors the bit pipe, with data decided at run time by µE1,
+and a runtime profile table (separate receive and transmit profiles, switched and rewritten while running). Next: bit-clock
+recovery, link-health reporting, 10 Mbit Ethernet receive, then a 70 MHz harden attempt (50 MHz fallback). See
+Deviation 8 and Build log section 9. The last hardened numbers below are from before this work.
 
 ## The original 10-item plan, and what happened to each
 
@@ -55,16 +61,18 @@ caveats are listed in `docs/design/design_rationale.txt`, Deviation 7.
 ### B. Hardening the design (optional, each invalidates the current layout and needs a full re-verify)
 - **Hardware halt / program-overrun guard.** Instruction SRAM is not cleared, so a program that runs off its last word
   executes arbitrary bits. Today this is a documented software rule (end with a halt).
-- **Runtime-data output.** `EMIT_STATE` sends a compile-time bit, so SPI MOSI is a fixed unrolled byte. A real driver
-  needs either an output shift-register opcode or per-transfer reprogramming.
+- ~~**Runtime-data output.**~~ Done (not yet hardened): `TX_PUSH`/`TX_ECHO` from µE1 and `EMIT_TX` on µE0, through the
+  transmit pipe. See Build log section 9.
 - **System-level formal proof** that the two engines cannot deadlock (currently directed simulation).
 
 ### C. The differentiators (the original thesis)
 - Done: hardware NRZI, bit-stuffing and CRC as one generic bit pipe; the N-sample glitch filter; USB low-speed receive
   simulated end to end and on the shipped Verilog; item 8 re-run with everything in.
-- Not built: windowed interval validation (the glitch filter's second stage), a transmit path (needs the runtime-data
-  output opcode in B), per-edge resync for a real 1.5%-tolerant USB link, CAN as a full program through the pins, and
-  the mid-bit phase-tracking counter for Manchester / 10 Mbit Ethernet.
+- Done since (not yet hardened): the transmit path, the runtime profile table, and USB transactions mixing CRC5 tokens
+  and CRC16 data in one run.
+- Not built: windowed interval validation (the glitch filter's second stage), per-edge resync for a real 1.5%-tolerant
+  USB link, CAN as a full program through the pins, and the mid-bit phase-tracking counter for Manchester / 10 Mbit
+  Ethernet.
 
 Sequencing: A first so a valid entry exists; then C (it is the novelty claim, and the gate budget has room for it);
 B items as time allows. Each step in B and C ends with the full loop: regression, harden, precheck, gate-level bench.
@@ -361,7 +369,45 @@ pins and loader, and later in cocotb on the shipped Verilog and the hardened net
 - Found while building it: three ISA changes are silent on a chip without the bit pipe (config bytes would load as
   program bytes, word bits 8-15 alias bits 0-7, `pipe_*` runs as CAPTURE), so the assembler targets this design only.
 
-## 9. Practical notes
+## 9. Transmit path and runtime profile table
+
+Started from `design_note_tx_clock_recovery.md`; the reasons and alternatives are in `docs/design/design_rationale.txt`,
+Deviation 8.
+
+- `lib/profile_table.ml`: four 16-byte bit-pipe profiles (profile p byte k at config index 32p + k, so the original 9
+  bytes are profile 0 unchanged), separate RX and TX pointers, a second write port for µE1's `CFG_WR`. The table lives in
+  `Dual` and the loader only produces write strobes; its index is 7 bits.
+- `lib/bitpipe.ml`: profile decoding, the run-length stuffing rule and the CRC step factored out so the transmit pipe uses
+  the same code; CRC widened to 32 bits (bytes 9 to 15).
+- `lib/txpipe.ml`: shift-out with auto-load, CRC over data then CRC append, stuff insertion, NRZI encode, and a `more` flag.
+- µE0: `EMIT_TX` (with open-drain and differential forms), `PIPE_CTRL` gains `tx_reset`, `tx_crc`, `sel_rx`, `sel_tx` and a
+  profile number in `pin_sel`, `BRANCH_COND` gains a flag form (payload bit 9). µE1: `TX_PUSH`, `TX_ECHO`, `CFG_WR`,
+  `PROFILE`, all in the previously unused `mode = 1` half of `FIFO_POP`'s opcode.
+- `out_reg`/`oe_reg` now latch on `advance` instead of `run`, because an `EMIT_TX` can stall and a stalled one must not
+  latch; for `EMIT_STATE`, which never stalls, the two are the same.
+
+**Bugs found**
+1. **Timer, shipped since the RAM fetch fix:** a timed `WAIT` right after an instruction with payload 1 expired on its
+   first cycle. Found because `test_dual_tx` checks that every USB bit cell is the same length: a `WAIT` after a
+   `release_pin` no-op lasted 1 cycle. Consequence on the submitted design: the I2C master's SCL high phase was 2
+   cycles, not 4. The I2C tests had a cycle budget sized from those short waits. Fixed in `timer.ml`, budgets resized
+   (`half_period + 3` per half: the wait plus up to two pin instructions), and the I2C test now asserts the shortest SCL
+   high phase.
+2. **Test bytes that could not fail:** the mutation check's "TX profile pointer ignored" survived. The SPI and `CFG_WR`
+   scenarios sent 0xA5 / 0x5A, which read the same MSB- and LSB-first. Replaced with 0xA6 / 0x3B; the mutant is caught.
+3. Mutants that left a variable unused failed to build under dune's dev profile (warnings as errors) and were reported
+   as errors, not results; mutants now build with `--profile release`.
+4. Files rewritten from Windows through the `\\wsl.localhost` path lose their executable bit (`run_regression.sh` then
+   "ran" silently as nothing). Restored with `chmod`; check `git diff --summary` for mode changes before committing.
+
+**Verified** (details in Deviation 8): `test_txpipe` (reference encoders and loopback, 600 random packets),
+`test_dual_tx` (UART, SPI full duplex, USB ACK and DATA0 at 33 cycles a bit, `CFG_WR`, open-drain, the timer
+regression), `test_usb_transaction` (CRC5 token + CRC16 data in one run, controls, a USB-to-UART bridge),
+`test_tt_um_dual_usb_tx` and cocotb's `usb_low_speed_transmit` through the real pins, `run_tx_mutation_test.sh` (13 of 13
+caught), and `tdasm` (`usb_tx.tds` matches the vector, `.profile` placement, five new refusals). Full regression passes,
+including every pre-existing suite unchanged. Not yet hardened.
+
+## 10. Practical notes
 
 - Dune quirk: `lib/tt_core.ml` shares its name with the library, which suppresses automatic submodule aliasing, so
   sibling modules need explicit `module X = X` lines in `tt_core.ml`.

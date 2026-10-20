@@ -32,10 +32,20 @@
 (fn (ramDepth)
   512)
 
-; Bitpipe.cfg_bytes.
+; Bitpipe.cfg_bytes: the bytes one profile holds.
 (:: cfgMax Int)
 (fn (cfgMax)
-  9)
+  16)
+
+; Profile_table.n_profiles, and the config-index distance between two
+; profiles (profile p byte k is index 32p + k).
+(:: nProfiles Int)
+(fn (nProfiles)
+  4)
+
+(:: profStride Int)
+(fn (profStride)
+  32)
 
 ; Section numbers. 0 is "before any .phys/.protocol line".
 (:: sectNone Int)
@@ -62,6 +72,10 @@
   (mut prescale : Int)
   (mut prescaleSet : Bool)
   (cfg : (Vec Int))
+  (p0 : (Vec Int))
+  (p1 : (Vec Int))
+  (p2 : (Vec Int))
+  (p3 : (Vec Int))
   (phys : (Vec Int))
   (proto : (Vec Int))
   (physSrc : (Vec String))
@@ -84,7 +98,22 @@
     vecNew
     vecNew
     vecNew
+    vecNew
+    vecNew
+    vecNew
+    vecNew
     vecNew))
+
+; The bytes given for profile n (`.cfg` is profile 0).
+(:: profVec (-> Asm Int (Vec Int)))
+(fn (profVec a n)
+  (if (== n 0)
+    a.p0
+    (== n 1)
+    a.p1
+    (== n 2)
+    a.p2
+    a.p3))
 
 ;@axiom:effect(io)
 (:: report (-> Asm Int String Int))
@@ -344,6 +373,9 @@
   (| (<< (& opcode 3) 14) (| (<< (& pin 7) 11) (| (<< (& mode 1) 10) (& payload 1023)))))
 
 ; The ops bit a `pipe_ctrl` flag word sets, or 0 for an unknown word.
+; reset / idle_high / crc_init drive the receive pipe, tx_reset / tx_crc
+; the transmit pipe, sel_rx / sel_tx point a pipe at the profile named
+; by a `p0`..`p3` word (engine.ml's PIPE_CTRL).
 (:: pipeFlag (-> String Int))
 (fn (pipeFlag t)
   (if (strEq t "reset")
@@ -352,28 +384,123 @@
     2
     (strEq t "crc_init")
     4
+    (strEq t "tx_reset")
+    8
+    (strEq t "tx_crc")
+    16
+    (strEq t "sel_rx")
+    32
+    (strEq t "sel_tx")
+    64
     0))
 
-; Optional flag words after `pipe_ctrl`.
+; `p0`..`p3` -> 0..3, anything else -> -1.
+(:: profTok (-> String Int))
+(fn (profTok t)
+  (if (strEq t "p0")
+    0
+    (strEq t "p1")
+    1
+    (strEq t "p2")
+    2
+    (strEq t "p3")
+    3
+    (- 0 1)))
+
+; Optional flag words after `pipe_ctrl`. Answers ops | (profile << 16).
 ;@axiom:effect(io)
 (:: pipeCtrlOps (-> Asm Int (Vec String) Int))
 (fn (pipeCtrlOps a lineNo ts)
   (let (
     (mut i 1)
     (mut ops 0)
+    (mut prof 0)
   )
     {
       (while (< i (vecLen ts))
         (let ((t (tok ts i)))
           {
-            (set ops (| ops (pipeFlag t)))
-            (if (== (pipeFlag t) 0)
-              (report a lineNo (format "pipe_ctrl flag `{t}` is not reset, idle_high or crc_init"))
-              0)
+            (if (>= (profTok t) 0)
+              {
+                (set prof (profTok t))
+                0
+              }
+              (== (pipeFlag t) 0)
+              (report a lineNo (format "pipe_ctrl flag `{t}` is not reset, idle_high, crc_init, tx_reset, tx_crc, sel_rx, sel_tx or p0..p3"))
+              {
+                (set ops (| ops (pipeFlag t)))
+                0
+              })
+            (set i (+ i 1))
+          }))
+      (| ops (<< prof 16))
+    }))
+
+; The payload bit a trailing flag word of instruction `m` sets, or 0 when
+; `t` is not one of its flags.
+(:: flagBit (-> String String Int))
+(fn (flagBit m t)
+  (if (strEq m "emit_tx")
+    (if (strEq t "open_drain")
+      1
+      (strEq t "diff")
+      4
+      0)
+    (|| (strEq m "tx_push") (strEq m "tx_echo"))
+    (if (strEq t "last")
+      256
+      0)
+    (strEq m "cfg_wr")
+    (if (strEq t "hi")
+      128
+      0)
+    (strEq m "profile")
+    (if (strEq t "rx")
+      4
+      (strEq t "tx")
+      8
+      (strEq t "crc_init")
+      16
+      0)
+    0))
+
+; OR of the flag words from token `first` on.
+;@axiom:effect(io)
+(:: flagsFrom (-> Asm Int (Vec String) Int Int))
+(fn (flagsFrom a lineNo ts first)
+  (let (
+    (m (tok ts 0))
+    (mut i first)
+    (mut ops 0)
+  )
+    {
+      (while (< i (vecLen ts))
+        (let ((t (tok ts i)))
+          {
+            (if (== (flagBit m t) 0)
+              (report a lineNo (format "`{t}` is not a flag of `{m}`"))
+              {
+                (set ops (| ops (flagBit m t)))
+                0
+              })
             (set i (+ i 1))
           }))
       ops
     }))
+
+; A flag number for br_flag / br_noflag: 0..7, or `tx_more` (0).
+;@axiom:effect(io)
+(:: flagOperand (-> Asm Int (Vec String) Int Int))
+(fn (flagOperand a lineNo ts i)
+  (if (&& (< i (vecLen ts)) (strEq (tok ts i) "tx_more"))
+    0
+    (operand
+      a
+      lineNo
+      ts
+      i
+      "flag"
+      7)))
 
 ; uE0 (phys) instruction word, or -1 when the mnemonic is unknown.
 ;@axiom:effect(io)
@@ -495,7 +622,34 @@
         (enc 2 0 1 512)
       }
       (strEq m "pipe_ctrl")
-      (enc 2 0 1 (| 768 (pipeCtrlOps a ln ts)))
+      (let ((r (pipeCtrlOps a ln ts)))
+        (enc 2 (>> r 16) 1 (| 768 (& r 255))))
+      (strEq m "emit_tx")
+      ; EMIT_STATE with payload[1]: the transmit pipe's next line bit
+      (let ((pin (operand
+        a
+        ln
+        ts
+        1
+        "pin"
+        7)))
+        (enc 1 pin 0 (| 2 (flagsFrom a ln ts 2))))
+      (|| (strEq m "br_flag") (strEq m "br_noflag"))
+      ; BRANCH_COND with payload[9]: an internal flag instead of a pin
+      (let (
+        (f (flagOperand a ln ts 1))
+        (t (target a ln ts 2))
+      )
+        {
+          (arity a ln ts 2)
+          (enc
+            3
+            f
+            (if (strEq m "br_flag")
+              1
+              0)
+            (| 512 t))
+        })
       (|| (strEq m "br_high") (strEq m "br_low"))
       (let (
         (pin (operand
@@ -529,6 +683,37 @@
         (arity a ln ts 0)
         (enc 0 0 0 0)
       }
+      ; the transmit / configuration group: opcode 00 with mode 1, the
+      ; operation in pin_sel (protocol_engine.ml)
+      (strEq m "tx_push")
+      (let ((b (operand
+        a
+        ln
+        ts
+        1
+        "byte"
+        255)))
+        (enc 0 0 1 (| b (flagsFrom a ln ts 2))))
+      (strEq m "tx_echo")
+      (enc 0 1 1 (flagsFrom a ln ts 1))
+      (strEq m "cfg_wr")
+      (let ((ix (operand
+        a
+        ln
+        ts
+        1
+        "config index"
+        127)))
+        (enc 0 2 1 (| ix (flagsFrom a ln ts 2))))
+      (strEq m "profile")
+      (let ((p (operand
+        a
+        ln
+        ts
+        1
+        "profile"
+        3)))
+        (enc 0 3 1 (| p (flagsFrom a ln ts 2))))
       (strEq m "emit")
       (let (
         (pin (operand
@@ -610,6 +795,85 @@
             t)
         })
       (- 0 1))))
+
+; ------------------------------------------------------------------
+; Bit-pipe profiles
+; ------------------------------------------------------------------
+; Config bytes from token `first` on, appended to profile p.
+;@axiom:effect(io)
+(:: cfgBytes (-> Asm Int (Vec String) Int Int Int))
+(fn (cfgBytes a lineNo ts first p)
+  (let (
+    (v (profVec a p))
+    (m (tok ts 0))
+    (mut k first)
+  )
+    {
+      (if (>= first (vecLen ts))
+        (report a lineNo (format "{m} needs at least one byte"))
+        0)
+      (while (< k (vecLen ts))
+        {
+          (vecPush v (operand
+            a
+            lineNo
+            ts
+            k
+            "config byte"
+            255))
+          (set k (+ k 1))
+        })
+      (if (> (vecLen v) (cfgMax))
+        (report a lineNo (format "more than 16 config bytes for profile {p}"))
+        0)
+    }))
+
+; The bytes the loader streams with cfg_sel: its index auto-increments
+; from 0, so every profile up to the last one used is sent, each padded
+; to the 32-byte stride but the last.
+(:: flattenCfg (-> Asm Int))
+(fn (flattenCfg a)
+  (let (
+    (mut last (- 0 1))
+    (mut p 0)
+  )
+    {
+      (while (< p (nProfiles))
+        {
+          (if (> (vecLen (profVec a p)) 0)
+            {
+              (set last p)
+              0
+            }
+            0)
+          (set p (+ p 1))
+        })
+      (set p 0)
+      (while (<= p last)
+        (let (
+          (v (profVec a p))
+          (mut i 0)
+        )
+          {
+            (while (< i (vecLen v))
+              {
+                (vecPush a.cfg (wordAt v i))
+                (set i (+ i 1))
+              })
+            (if (< p last)
+              {
+                (while (< i (profStride))
+                  {
+                    (vecPush a.cfg 0)
+                    (set i (+ i 1))
+                  })
+                0
+              }
+              0)
+            (set p (+ p 1))
+          }))
+      0
+    }))
 
 ; ------------------------------------------------------------------
 ; The two passes
@@ -698,26 +962,22 @@
                         0)
                       (strEq m ".cfg")
                       (if (== pass 1)
-                        (let ((mut k 1))
-                          {
-                            (if (< (vecLen ts) 2)
-                              (report a ln ".cfg needs at least one byte")
-                              0)
-                            (while (< k (vecLen ts))
-                              {
-                                (vecPush a.cfg (operand
-                                  a
-                                  ln
-                                  ts
-                                  k
-                                  "config byte"
-                                  255))
-                                (set k (+ k 1))
-                              })
-                            (if (> (vecLen a.cfg) (cfgMax))
-                              (report a ln "more than 9 config bytes in total")
-                              0)
-                          })
+                        (cfgBytes a ln ts 1 0)
+                        0)
+                      (strEq m ".profile")
+                      (if (== pass 1)
+                        (cfgBytes
+                          a
+                          ln
+                          ts
+                          2
+                          (operand
+                            a
+                            ln
+                            ts
+                            1
+                            "profile"
+                            3))
                         0)
                       (== a.sect (sectNone))
                       (report a ln (format "instruction `{m}` before any .phys or .protocol line"))
@@ -967,6 +1227,7 @@
         )
           {
             (runPass a lines 1)
+            (flattenCfg a)
             (if (== a.errors 0)
               (runPass a lines 2)
               0)

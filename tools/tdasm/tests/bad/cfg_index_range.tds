@@ -1,0 +1,4 @@
+.prescale 0
+.protocol
+  pop
+  cfg_wr 128

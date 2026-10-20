@@ -224,8 +224,67 @@ let usb_packet_symbols payload =
 
 let usb_payload = [ 0x80; 0x06; 0x00; 0x01; 0x00; 0x00; 0x40; 0x00 ] (* GET_DESCRIPTOR *)
 
+(* ---- USB low-speed TRANSMIT (same program and profile as
+   test_tt_um_dual_usb_tx.ml; 33 cycles a bit, i.e. 1.5 Mbit/s at 50 MHz).
+   µE1 decides the packet at run time (TX_PUSH, last byte flagged); µE0
+   sends it with one EMIT_TX per line bit, D+ the complement of D- in the
+   same cycle, appends the CRC, then the EOP. ---- *)
+let usb_tx_t = 30 (* WAIT payload; a bit cell is t + 3 cycles *)
+let usb_tx_cell = usb_tx_t + 3
+
+(* USB profile with crc_out_invert (bit 7): the CRC goes out complemented *)
+let usb_tx_cfg_bytes =
+  let lo x = x land 0xFF and hi x = (x lsr 8) land 0xFF in
+  [ 0b1001_1011; 6; (2 lsl 4) lor 15; lo 0xA001; hi 0xA001; lo 0xFFFF; hi 0xFFFF; lo 0xB001; hi 0xB001 ]
+
+let usb_tx_program =
+  let t = usb_tx_t in
+  let wait n = Engine.wait_edge ~pin:7 ~falling:true ~payload:n in
+  Engine.
+    [ pipe_ctrl_ext ~tx_reset:true ~prev_level:true ()
+    ; emit_state ~pin:usb_dm ~level:true (* J *)
+    ; emit_state ~pin:usb_dp ~level:false
+    ; wait t (* 3: data loop *)
+    ; emit_tx ~differential:true ~pin:usb_dm ()
+    ; branch_flag ~flag:flag_tx_more ~branch_if_set:true ~target:3
+    ; pipe_ctrl_ext ~tx_crc:true ()
+    ; wait (t - 1) (* the pipe_ctrl costs the cycle *)
+    ; emit_tx ~differential:true ~pin:usb_dm ()
+    ; release_pin ~pin:7 (* no-op standing in for the branch *)
+    ; wait t (* 10: CRC loop *)
+    ; emit_tx ~differential:true ~pin:usb_dm ()
+    ; branch_flag ~flag:flag_tx_more ~branch_if_set:true ~target:10
+    ; wait t
+    ; emit_state ~pin:usb_dm ~level:false (* SE0 *)
+    ; emit_state ~pin:usb_dp ~level:false
+    ; wait ((2 * t) + 4) (* two cells of SE0 *)
+    ; emit_state ~pin:usb_dm ~level:true (* J *)
+    ; wait t
+    ; release_pin ~pin:usb_dm
+    ; release_pin ~pin:usb_dp
+    ; wait_edge ~pin:7 ~falling:true ~payload:0 (* halt *)
+    ]
+
+let usb_tx_packet = 0x80 :: 0xC3 :: usb_payload (* SYNC, DATA0, GET_DESCRIPTOR *)
+
+let usb_tx_protocol_prog =
+  let n = List.length usb_tx_packet in
+  List.mapi (fun k b -> Protocol_engine.tx_push ~last:(k = n - 1) b) usb_tx_packet
+  @ [ Protocol_engine.fifo_pop_instr (* halt *) ]
+
+(* the expected line, one symbol per bit cell: 1 = J, 0 = K, 2 = SE0 *)
+let usb_tx_symbols =
+  let c = usb_crc16 usb_payload in
+  usb_nrzi (usb_stuff (List.concat_map bits_of_byte_lsb (usb_tx_packet @ [ c land 0xFF; (c lsr 8) land 0xFF ])))
+  @ [ 2; 2; 1 ]
+
 let () =
   match Array.to_list Sys.argv with
+  | [ _; "usb_tx" ] ->
+    Printf.printf
+      "{\n  \"prescale\": 0,\n  \"cell\": %d,\n  \"cfg\": %s,\n  \"pins\": {\"dm\": %d, \"dp\": %d},\n  \"phys\": %s,\n  \"protocol\": %s,\n  \"symbols\": %s\n}\n"
+      usb_tx_cell (json_list usb_tx_cfg_bytes) usb_dm usb_dp (json_list usb_tx_program)
+      (json_list usb_tx_protocol_prog) (json_list usb_tx_symbols)
   | [ _; "usb" ] ->
     let good = usb_packet_symbols usb_payload in
     let bad = List.mapi (fun i s -> if i = 36 then 1 - s else s) good in

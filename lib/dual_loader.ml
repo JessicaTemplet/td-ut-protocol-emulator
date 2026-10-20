@@ -95,7 +95,9 @@ module O = struct
     checksum              : 'a; [@bits 8]
     run                   : 'a;
     prescale               : 'a; [@bits 8]
-    bp_cfg                : 'a; [@bits 72]
+    cfg_we                : 'a;
+    cfg_addr              : 'a; [@bits 7]
+    cfg_data              : 'a; [@bits 8]
   } [@@deriving sexp_of, hardcaml]
 end
 
@@ -114,24 +116,20 @@ let create (inputs : Signal.t I.t) =
   let run = wire 1 in
   let not_run = ~:run in
 
-  (* Optional configuration path (bit pipe + glitch filter, see bitpipe.ml):
-     while `cfg_sel` is high a strobe writes the next of 9 config bytes
-     instead of a prescale byte or program word. Hosts that never raise
-     cfg_sel (every existing test and program) see no change at all. *)
+  (* Optional configuration path (bit-pipe profiles + glitch filter, see
+     profile_table.ml): while `cfg_sel` is high a strobe writes the next
+     profile-table byte (index 0, 1, 2, ... auto-incrementing, saturating
+     at 127) instead of a prescale byte or program word. The table itself
+     lives in Dual, because µE1's CFG_WR writes it too; this loader only
+     produces the write strobe. Hosts that never raise cfg_sel (every
+     existing test and program) see no change at all, and a host that
+     loads the original 9 bytes configures profile 0 exactly as before. *)
   let cfg_sel = inputs.cfg_sel in
   let cfg_write = strobe_edge &&: not_run &&: cfg_sel in
-  let cfg_idx = wire 4 in
+  let cfg_idx = wire Profile_table.index_width in
   cfg_idx
-  <== reg_fb ~enable:(one 1) spec ~width:4 ~f:(fun cur ->
-        mux2 (cfg_write &&: (cur <>:. 15)) (cur +:. 1) cur);
-  let cfg_byte k =
-    let r = wire 8 in
-    r
-    <== reg_fb ~enable:(one 1) spec ~width:8 ~f:(fun cur ->
-          mux2 (cfg_write &&: (cfg_idx ==:. k)) inputs.data_in cur);
-    r
-  in
-  let bp_cfg = concat_msb (List.rev (List.init Bitpipe.cfg_bytes cfg_byte)) in
+  <== reg_fb ~enable:(one 1) spec ~width:Profile_table.index_width ~f:(fun cur ->
+        mux2 (cfg_write &&: (cur <>:. 127)) (cur +:. 1) cur);
 
   let prescale_loaded = wire 1 in
   let load_prescale = strobe_edge &&: not_run &&: (~:cfg_sel) &&: (~:prescale_loaded) in
@@ -182,5 +180,7 @@ let create (inputs : Signal.t I.t) =
   ; checksum
   ; run
   ; prescale
-  ; bp_cfg
+  ; cfg_we = cfg_write
+  ; cfg_addr = cfg_idx
+  ; cfg_data = inputs.data_in
   }

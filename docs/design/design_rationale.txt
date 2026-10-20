@@ -212,3 +212,84 @@ headroom is about 4x.
 **Measured numbers that supersede the blueprint's estimates** (hardened, 6x4 tiles, before the bit pipe was added):
 1,926 standard cells (28,018 um^2) plus 4 SRAM macros (104,552 um^2); 0.98 mW; setup slack +8.6 ns and hold slack +0.11 ns at the
 worst corner; LVS, Magic DRC, route DRC and antenna all clean; precheck passes.
+
+### Deviation 8: A transmit path, and the bit-pipe configuration became a runtime profile table (2026-10-20)
+
+**What changed.** Deviation 7's receive-only bit pipe gained its mirror image, and its single load-once configuration became
+a table of profiles that both engines can switch and rewrite while running.
+
+- **Transmit pipe** (`lib/txpipe.ml`): one `EMIT_TX` per line bit shifts the next bit of a byte out, runs the CRC over it,
+  inserts stuff bits, and NRZI-encodes, from the same profile layout the receive pipe decodes. After `PIPE_CTRL tx_crc` it
+  sends the CRC itself (complemented when the profile says so). A stuff bit takes a step without consuming data, so the program
+  still issues exactly one instruction per line bit and never needs to know where stuffing landed. With an all-zero profile it
+  is a plain LSB-first shifter (UART), with `msb_first` alone an MSB-first one (SPI).
+- **Runtime data**: µE1 decides what is sent. `TX_PUSH` pushes an immediate byte and `TX_ECHO` the byte it last popped into a
+  second `Shadow_fifo` instance, each with a `last` flag; µE0's transmit pipe pops it. Reusing the FIFO module means the
+  unbounded formal proof and the bounded-exhaustive check cover the TX FIFO unchanged. This closes the "EMIT_STATE drives a
+  compile-time bit" limitation (ROADMAP B, "runtime-data output").
+- **Profile table** (`lib/profile_table.ml`): four 16-byte profiles (framing, stuffing, CRC up to 32 bits). The receive and the
+  transmit pipe each have their own pointer. µE0's `PIPE_CTRL` and µE1's `PROFILE` move them in one instruction; µE1's
+  `CFG_WR` writes a profile byte from data it popped.
+- **Smaller additions**: `EMIT_TX` open-drain (a 0 drives low, a 1 releases: I2C write data) and differential (the paired pin
+  gets the complement in the same cycle: USB D-/D+, RS-485); a `BRANCH_COND` form that tests an internal flag instead of a pin
+  (flag 0: the transmit pipe still has data, CRC or a stuff bit to send).
+
+**Why a profile table rather than a wider flat configuration.** The deciding requirement is low-speed USB, a stretch goal of
+the challenge: one transaction mixes CRC5 tokens, CRC16 data packets and CRC-less handshakes on one link, so a receiver must
+change its CRC between packets based on the PID it just read. A flat configuration loaded once cannot, and the existing tests
+had sidestepped it by decoding tokens and data packets in separate runs with separate configurations. With profiles, µE1 reads
+the PID and switches the receive pipe (and reloads its CRC from the new profile) between the PID and the first CRC'd bit;
+at low speed that window is 33 clocks. A transmit path then needed its own configuration anyway: bridging two protocols
+(USB in, UART out) runs two different profiles at the same time. Alternatives considered and rejected:
+- One configuration per pipe, rewritten by the program: switching a CRC means rewriting about 12 bytes, far more instructions
+  than fit between a PID and its first CRC bit. Kept as an addition instead (`CFG_WR`), for retuning and self-calibration.
+- Profiles in SRAM, copied into a working register on switch: denser, but a switch costs about 20 cycles and another macro,
+  and area is not the constraint (about 17% of the die is used).
+- A fully programmable (microcoded) bit pipe: changes what a profile describes, not how profiles are stored or switched, and
+  is far larger. Parity (SWD, PS/2, UART) already works as a 1-bit CRC with polynomial 1.
+- Hardware auto-switching (for example after the PID byte): bakes USB into silicon, the fixed-function approach the
+  challenge argues against.
+
+**Compatibility.** Profile 0 byte k is configuration index k, and both pointers reset to profile 0, so a host that loads the
+original 9 configuration bytes configures exactly what it did before; bytes 9 to 15 extend the CRC to 32 bits (zero means at
+most 16, as before). The loader's index only got wider (7 bits). Every existing program, every `tdasm` output and every
+gl_test vector is unchanged, and every pre-existing suite passes.
+
+**Deviation from the design note.** The note proposed `TX_LOAD` (µE0 pops a byte into the shift register) next to `EMIT_TX`.
+The built pipe auto-loads instead: when a byte is used up, the next `EMIT_TX` takes the next one in the same step. That removes
+a bit counter from every program, keeps stuffing invisible to software (a program cannot know where a stuff bit lands, so it
+could not know when to load), and frees the encoding.
+
+**A shipped bug the new tests found.** The engine re-arms its timer after every instruction with that instruction's payload
+(`load = reg advance`). A timed `WAIT` whose predecessor had payload 1 (`release_pin`, `shift_in_push`, open-drain `EMIT_TX`)
+inherited a counter of 0 and expired on its first cycle, ignoring its own payload. The I2C master releases SCL and then waits,
+so on the submitted design SCL's high phase was 2 cycles instead of the programmed half period: well-formed in simulation,
+and a violation of I2C's minimum SCL high time against a real device. The existing I2C tests passed because their cycle
+budget had been sized from the same shortened waits. Fixed in `timer.ml` (`expired` cannot fire on a load cycle); the I2C
+tests now check the shortest SCL high phase, which fails on the old timer (2 cycles) and passes on the new one (6).
+
+**What was verified.**
+- Transmit pipe alone (`test_txpipe`): bit for bit against independent reference encoders (USB: CRC16 + stuffing + NRZI; CAN:
+  CRC15 + both-polarity stuffing), the GET_DESCRIPTOR packet going out as `... 40 00 DD 94`, 300 random USB packets (230 of
+  them stuffed, including inside and right after the CRC) and 300 random CAN payloads; and every one looped back through the
+  receive pipe to the same bytes with crc_ok.
+- On the dual-engine core (`test_dual_tx`): UART frames from µE1's bytes with a constant bit cell across byte boundaries; SPI
+  full duplex with a runtime MOSI payload; USB low-speed ACK and DATA0 on differential D-/D+ at 1.5 Mbit/s (33 cycles a bit at
+  50 MHz) with a constant cell across the data/CRC boundary and a correct EOP, plus 40 random packets; `CFG_WR` turning a
+  profile from LSB- to MSB-first at run time; open-drain output.
+- Profiles in use (`test_usb_transaction`): a SETUP token (CRC5) followed by a DATA0 packet (CRC16) in one run, both accepted;
+  with switching disabled, either pinned profile accepts only one of the two; 20 random transactions; a corrupted token
+  rejected while the following data packet is still accepted; and a USB-to-UART bridge, USB in on profile 0 and UART out on
+  profile 1 at the same time.
+- Through the real pins and on the shipped Verilog: `test_tt_um_dual_usb_tx` (Cyclesim) and gl_test's `usb_low_speed_transmit`
+  (cocotb with the vendor SRAM model) send the GET_DESCRIPTOR packet with the profile loaded over the pins, sampled mid-cell
+  against the reference line.
+- Mutation check (`run_tx_mutation_test.sh`, part of the regression): 13 injected faults, each caught. Two are worth naming.
+  "Wrong CRC polynomial in both directions" survives loopback by construction and is caught only by the reference encoders.
+  "TX profile pointer ignored" first SURVIVED: the test bytes 0xA5 and 0x5A are bit palindromes, identical MSB- and LSB-first,
+  so the order checks could not fail. They now use 0xA6 and 0x3B.
+- `tdasm` assembles a `usb_tx.tds` source to exactly the gl_test vector's words, and places `.profile N` bytes at index 32N+k.
+
+**What this does not claim (yet).** Per-edge clock recovery, link-health reporting and 10 Mbit Ethernet receive (the next items
+in the design note) are not built. USB transmit is shown for handshake and data packets; a full device (enumeration, timeouts,
+bus turnaround) is not. Not yet re-hardened: area and timing with the table and the transmit pipe are unmeasured.

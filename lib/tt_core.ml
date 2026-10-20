@@ -215,8 +215,9 @@ let tt_um_system_asic (inputs : Signal.t I.t) =
      uio_in[3]   -> engine_sel (pre-run) / pins_in bit 3 (post-run)
      uio_in[4]   -> cfg_sel    (pre-run) / pins_in bit 4 (post-run): while
                     high, a strobe writes a BIT-PIPE / GLITCH-FILTER
-                    configuration byte (auto-incrementing index 0..8,
-                    see bitpipe.ml) instead of a program word
+                    configuration byte (auto-incrementing profile-table
+                    index 0..127, see profile_table.ml) instead of a
+                    program word
      uio_in[7:5] -> unused pre-run / pins_in bits 5-7 post-run
                     engine_sel costs zero new physical pins by the
                     same double-duty argument tt_um_system already
@@ -283,7 +284,9 @@ let tt_um_dual_generic ~dual_create (inputs : Signal.t I.t) =
       ; protocol_write_enable = loader_out.Dual_loader.O.protocol_write_enable
       ; protocol_write_addr = loader_out.Dual_loader.O.protocol_write_addr
       ; protocol_write_data = loader_out.Dual_loader.O.write_data
-      ; bp_cfg = loader_out.Dual_loader.O.bp_cfg
+      ; cfg_we = loader_out.Dual_loader.O.cfg_we
+      ; cfg_addr = loader_out.Dual_loader.O.cfg_addr
+      ; cfg_data = loader_out.Dual_loader.O.cfg_data
       }
   in
   let combine_bit i =
@@ -323,4 +326,6 @@ module Protocol_engine = Protocol_engine
 module Dual = Dual
 module Dual_loader = Dual_loader
 module Bitpipe = Bitpipe
+module Txpipe = Txpipe
+module Profile_table = Profile_table
 module Glitch_filter = Glitch_filter

@@ -22,7 +22,7 @@ fields() {  # print prescale, cfg, phys, protocol of a vectors JSON, one per lin
   python3 -c 'import json,sys; v=json.load(open(sys.argv[1]))
 for k in ("prescale","cfg","phys","protocol"): print(k, v.get(k, []))' "$1"
 }
-for pair in spi_master:spi i2c_master_read:i2c usb_rx:usb; do
+for pair in spi_master:spi i2c_master_read:i2c usb_rx:usb usb_tx:usb_tx; do
   src=${pair%%:*}; gold=$HC/gl_test/${pair##*:}_vectors.json
   ./tdasm "examples/$src.tds" --quiet --json "$out/$src.json" --load "$out/$src.load" || { echo "FAIL $src: assembler error"; fail=1; continue; }
   if diff <(fields "$gold") <(fields "$out/$src.json") >/dev/null; then
@@ -47,10 +47,28 @@ expect undefined_label.tds    "undefined label \`nowhere\`"
 expect other_engine_label.tds "belongs to the other engine"
 expect wrong_engine_op.tds    "unknown uE1 (.protocol) instruction \`shift\`"
 expect missing_prescale.tds   "missing .prescale line"
-expect cfg_too_long.tds       "more than 9 config bytes"
+expect cfg_too_long.tds       "more than 16 config bytes for profile 0"
+expect profile_range.tds      "profile 4 is out of range 0..3"
+expect bad_flag.tds           "\`first\` is not a flag of \`tx_push\`"
+expect cfg_index_range.tds    "config index 128 is out of range 0..127"
+expect flag_range.tds         "flag 8 is out of range 0..7"
 expect duplicate_label.tds    "label \`a\` defined twice"
 expect timeout_range.tds      "timeout 1024 is out of range 0..1023"
 expect too_many_operands.tds  "too many operands for \`emit\`"
+
+# --- 3. profile placement ----------------------------------------------
+# The loader's config index auto-increments from 0 and profile p byte k is
+# index 32p + k (profile_table.ml), so `.profile 2` bytes must arrive
+# after profiles 0 and 1, each padded to 32 bytes.
+printf '.prescale 0\n.cfg 1 2\n.profile 2 7 8 9\n.phys\n  halt\n.protocol\n  pop\n' > "$out/prof.tds"
+expected="[1, 2$(printf ', 0%.0s' $(seq 30))$(printf ', 0%.0s' $(seq 32)), 7, 8, 9]"
+./tdasm "$out/prof.tds" --quiet --json "$out/prof.json" || fail=1
+got=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["cfg"])' "$out/prof.json")
+if [ "$got" = "$expected" ]; then
+  echo "ok   .profile bytes land at index 32p + k"
+else
+  echo "FAIL .profile placement: got $got"; fail=1
+fi
 
 rm -rf "$out"
 if [ $fail = 0 ]; then echo "RESULT: PASS"; else echo "RESULT: FAIL"; exit 1; fi

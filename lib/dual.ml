@@ -69,6 +69,17 @@ open Signal
    isn't purely a testability hack -- see test_dual.ml, which pauses
    µE1 deliberately to prove µE0 actually stalls, not just races
    through unopposed.
+
+   Transmit direction (the receive path reversed): µE1's TX_PUSH /
+   TX_ECHO push bytes into a SECOND Shadow_fifo instance, and µE0's
+   transmit pipe (txpipe.ml, driven by EMIT_TX) pops them. Same FIFO
+   module, so the formal proof and the bounded-exhaustive check on
+   Shadow_fifo cover this instance unchanged.
+
+   The bit-pipe configuration lives in the profile table
+   (profile_table.ml), written by the loader (`cfg_we`/`cfg_addr`/
+   `cfg_data`, pre-run) and by µE1's CFG_WR (post-run). µE0's PIPE_CTRL
+   and µE1's PROFILE move the RX and TX pointers.
    ============================================================ *)
 module I = struct
   type 'a t = {
@@ -84,7 +95,9 @@ module I = struct
     protocol_write_enable : 'a;
     protocol_write_addr   : 'a; [@bits 9]
     protocol_write_data   : 'a; [@bits 16]
-    bp_cfg                : 'a; [@bits 72]
+    cfg_we                : 'a;
+    cfg_addr              : 'a; [@bits 7]
+    cfg_data              : 'a; [@bits 8]
   } [@@deriving sexp_of, hardcaml]
 end
 
@@ -99,6 +112,10 @@ module O = struct
     rx_word            : 'a; [@bits 16]
     fifo_full          : 'a;
     fifo_empty         : 'a;
+    tx_fifo_full       : 'a;
+    tx_fifo_empty      : 'a;
+    rx_profile         : 'a; [@bits 2]
+    tx_profile         : 'a; [@bits 2]
   } [@@deriving sexp_of, hardcaml]
 end
 
@@ -111,24 +128,60 @@ end
    through the hard-macro path). *)
 let create_generic ~engine_create ~protocol_create (inputs : Signal.t I.t) =
   let push_stall = wire 1 in
-  (* Per-pin glitch filter on the shared pin bus, configured by byte 1
-     bits [7:4] of the bit-pipe config (0 = bypass, so invisible unless a
-     program's config asks for it). Both engines see the filtered pins. *)
+  let e0_sel_rx = wire 1 and e0_sel_tx = wire 1 and e0_sel_id = wire 2 in
+  let e1_sel_rx = wire 1 and e1_sel_tx = wire 1 and e1_sel_id = wire 2 in
+  let rt_we = wire 1 and rt_addr = wire 7 and rt_data = wire 8 in
+  let table =
+    Profile_table.create
+      { Profile_table.I.clk = inputs.clk
+      ; rst_n = inputs.rst_n
+      ; load_we = inputs.cfg_we
+      ; load_addr = inputs.cfg_addr
+      ; load_data = inputs.cfg_data
+      ; rt_we
+      ; rt_addr
+      ; rt_data
+      ; e0_sel_rx
+      ; e0_sel_tx
+      ; e0_sel_id
+      ; e1_sel_rx
+      ; e1_sel_tx
+      ; e1_sel_id
+      }
+  in
+  (* Per-pin glitch filter on the shared pin bus, configured by profile 0
+     byte 1 bits [7:4] (0 = bypass, so invisible unless a program's config
+     asks for it). Both engines see the filtered pins. *)
   let pins_in =
     (Glitch_filter.create
        { Glitch_filter.I.clk = inputs.clk
        ; rst_n = inputs.rst_n
        ; run = inputs.run
        ; pins_in = inputs.pins_in
-       ; n = select inputs.bp_cfg 15 12
+       ; n = table.Profile_table.O.glitch_n
        }).Glitch_filter.O.pins_out
   in
+  let tx_push = wire 1 and tx_push_data = wire 16 and tx_pop = wire 1 in
+  let tx_fifo =
+    Shadow_fifo.create
+      { Shadow_fifo.I.clk = inputs.clk
+      ; rst_n = inputs.rst_n
+      ; push = tx_push
+      ; push_data = tx_push_data
+      ; pop = tx_pop
+      }
+  in
+  let protocol_crc_init = wire 1 in
   let engine_out =
     engine_create
       { Engine.I.clk = inputs.clk
       ; rst_n = inputs.rst_n
       ; pins_in
-      ; bp_cfg = inputs.bp_cfg
+      ; rx_cfg = table.Profile_table.O.rx_cfg
+      ; tx_cfg = table.Profile_table.O.tx_cfg
+      ; tx_fifo_data = tx_fifo.Shadow_fifo.O.pop_data
+      ; tx_fifo_empty = tx_fifo.Shadow_fifo.O.empty
+      ; ext_rx_crc_init = protocol_crc_init
       ; prescale = inputs.prescale
       ; run = inputs.run
       ; write_enable = inputs.phys_write_enable
@@ -137,6 +190,10 @@ let create_generic ~engine_create ~protocol_create (inputs : Signal.t I.t) =
       ; push_stall
       }
   in
+  tx_pop <== engine_out.Engine.O.tx_fifo_pop;
+  e0_sel_rx <== engine_out.Engine.O.sel_rx;
+  e0_sel_tx <== engine_out.Engine.O.sel_tx;
+  e0_sel_id <== engine_out.Engine.O.sel_id;
 
   let fifo_pop_req = wire 1 in
   (* Two mutually-exclusive push sources (byte-relay, capture) share one
@@ -169,9 +226,19 @@ let create_generic ~engine_create ~protocol_create (inputs : Signal.t I.t) =
       ; write_data = inputs.protocol_write_data
       ; fifo_pop_data = fifo_out.Shadow_fifo.O.pop_data
       ; fifo_empty = fifo_out.Shadow_fifo.O.empty
+      ; tx_fifo_full = tx_fifo.Shadow_fifo.O.full
       }
   in
   fifo_pop_req <== protocol_out.Protocol_engine.O.fifo_pop;
+  tx_push <== protocol_out.Protocol_engine.O.tx_push;
+  tx_push_data <== protocol_out.Protocol_engine.O.tx_data;
+  rt_we <== protocol_out.Protocol_engine.O.cfg_we;
+  rt_addr <== protocol_out.Protocol_engine.O.cfg_addr;
+  rt_data <== protocol_out.Protocol_engine.O.cfg_data;
+  e1_sel_rx <== protocol_out.Protocol_engine.O.sel_rx;
+  e1_sel_tx <== protocol_out.Protocol_engine.O.sel_tx;
+  e1_sel_id <== protocol_out.Protocol_engine.O.sel_id;
+  protocol_crc_init <== protocol_out.Protocol_engine.O.rx_crc_init;
 
   { O.phys_pc = engine_out.Engine.O.pc
   ; phys_pins_out = engine_out.Engine.O.pins_out
@@ -182,6 +249,10 @@ let create_generic ~engine_create ~protocol_create (inputs : Signal.t I.t) =
   ; rx_word = protocol_out.Protocol_engine.O.rx_word
   ; fifo_full = fifo_out.Shadow_fifo.O.full
   ; fifo_empty = fifo_out.Shadow_fifo.O.empty
+  ; tx_fifo_full = tx_fifo.Shadow_fifo.O.full
+  ; tx_fifo_empty = tx_fifo.Shadow_fifo.O.empty
+  ; rx_profile = table.Profile_table.O.rx_id
+  ; tx_profile = table.Profile_table.O.tx_id
   }
 
 let create (inputs : Signal.t I.t) =

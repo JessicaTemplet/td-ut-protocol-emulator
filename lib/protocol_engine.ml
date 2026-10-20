@@ -27,6 +27,25 @@ open Signal
                match. Once data is available, pops it into the held
                `rx_word` register and advances. `pin_sel`/`mode`/
                `payload` are unused/reserved (0) for this opcode.)
+   opcode 00 with mode = 1: the transmit and configuration group,
+               pin_sel[1:0] choosing the operation (pin_sel[2] = 0):
+                 0 TX_PUSH imm   push {last = payload[8], payload[7:0]}
+                                 into the TX FIFO (µE0's transmit pipe
+                                 reads it). Stalls while the FIFO is full,
+                                 like FIFO_POP stalls while it is empty.
+                 1 TX_ECHO       push {payload[8], low byte of rx_word}:
+                                 relay a received byte back out.
+                 2 CFG_WR        write one byte of rx_word (the high byte
+                                 if payload[7]) into the profile table at
+                                 index payload[6:0]. Lets a program build
+                                 or retune a profile from data it measured
+                                 (e.g. a bit period from CAPTURE records).
+                 3 PROFILE       point the RX pipe (payload[2]) and/or the
+                                 TX pipe (payload[3]) at profile
+                                 payload[1:0]; payload[4] reloads the RX
+                                 CRC from the new profile a cycle later.
+                                 This is how a USB program switches to the
+                                 CRC5 or CRC16 profile after reading a PID.
    opcode 01 = EMIT_STATE   (byte-for-byte the same semantics as
                engine.ml's EMIT_STATE, including the payload-bit-0
                release/tri-state flag -- µE1 needs its own response
@@ -78,6 +97,7 @@ module I = struct
     write_data    : 'a; [@bits 16]
     fifo_pop_data : 'a; [@bits 16]
     fifo_empty    : 'a;
+    tx_fifo_full  : 'a;
   } [@@deriving sexp_of, hardcaml]
 end
 
@@ -88,6 +108,15 @@ module O = struct
     pins_oe   : 'a; [@bits 8]
     fifo_pop  : 'a;
     rx_word   : 'a; [@bits 16]
+    tx_push   : 'a;
+    tx_data   : 'a; [@bits 16]
+    cfg_we    : 'a;
+    cfg_addr  : 'a; [@bits 7]
+    cfg_data  : 'a; [@bits 8]
+    sel_rx    : 'a;
+    sel_tx    : 'a;
+    sel_id    : 'a; [@bits 2]
+    rx_crc_init : 'a;
   } [@@deriving sexp_of, hardcaml]
 end
 
@@ -110,6 +139,18 @@ let branch_word ~bit ~branch_if_one ~target =
 
 let branch_pin ~pin ~branch_if_high ~target =
   encode ~opcode:3 ~pin ~mode:(if branch_if_high then 1 else 0) ~payload:target
+
+let tx_push ?(last = false) byte =
+  encode ~opcode:0 ~pin:0 ~mode:1 ~payload:((if last then 0x100 else 0) lor (byte land 0xFF))
+
+let tx_echo ?(last = false) () = encode ~opcode:0 ~pin:1 ~mode:1 ~payload:(if last then 0x100 else 0)
+
+let cfg_wr ?(high_byte = false) ~index () =
+  encode ~opcode:0 ~pin:2 ~mode:1 ~payload:((if high_byte then 0x80 else 0) lor (index land 0x7F))
+
+let profile ?(rx = false) ?(tx = false) ?(crc_init = false) id =
+  let b c n = if c then 1 lsl n else 0 in
+  encode ~opcode:0 ~pin:3 ~mode:1 ~payload:((id land 3) lor b rx 2 lor b tx 3 lor b crc_init 4)
 
 let pc_width = Loader.addr_width
 let ram_depth = 1 lsl pc_width
@@ -163,12 +204,20 @@ let create_generic ~build_instr (inputs : Signal.t I.t) =
   let payload = select instr 9 0 in
   let payload_bit0 = select payload 0 0 in
 
-  let is_pop = opcode ==:. 0 in
+  let is_pop = (opcode ==:. 0) &&: (~:mode) in
   let is_emit = opcode ==:. 1 in
   let is_branch_word = opcode ==:. 2 in
   let is_branch_pin = opcode ==:. 3 in
+  let is_group = (opcode ==:. 0) &&: mode in
+  let is_tx_push = is_group &&: (pin_sel ==:. 0) in
+  let is_tx_echo = is_group &&: (pin_sel ==:. 1) in
+  let is_cfg_wr = is_group &&: (pin_sel ==:. 2) in
+  let is_profile = is_group &&: (pin_sel ==:. 3) in
+  let is_push = is_tx_push |: is_tx_echo in
 
-  advance <== (inputs.run &&: mux2 is_pop (~:(inputs.fifo_empty)) vdd);
+  advance
+  <== (inputs.run
+      &&: mux2 is_pop (~:(inputs.fifo_empty)) (mux2 is_push (~:(inputs.tx_fifo_full)) vdd));
 
   (* Pop exactly on the cycle a FIFO_POP instruction completes --
      drives both the external `fifo_pop` (wired to the shadow FIFO's
@@ -210,7 +259,24 @@ let create_generic ~build_instr (inputs : Signal.t I.t) =
   in
   let pins_oe = concat_msb (List.init 8 (fun i -> oe_reg (7 - i))) in
 
-  { O.pc; pins_out; pins_oe; fifo_pop; rx_word }
+  let pbit n = select payload n n in
+  let tx_byte = mux2 is_tx_echo (select rx_word 7 0) (select payload 7 0) in
+  let do_profile = advance &&: is_profile in
+  { O.pc
+  ; pins_out
+  ; pins_oe
+  ; fifo_pop
+  ; rx_word
+  ; tx_push = advance &&: is_push
+  ; tx_data = concat_msb [ zero 7; pbit 8; tx_byte ]
+  ; cfg_we = advance &&: is_cfg_wr
+  ; cfg_addr = select payload 6 0
+  ; cfg_data = mux2 (pbit 7) (select rx_word 15 8) (select rx_word 7 0)
+  ; sel_rx = do_profile &&: pbit 2
+  ; sel_tx = do_profile &&: pbit 3
+  ; sel_id = select payload 1 0
+  ; rx_crc_init = reg spec (do_profile &&: pbit 4)
+  }
 
 let create (inputs : Signal.t I.t) = create_generic ~build_instr:behavioral_ram inputs
 let create_asic (inputs : Signal.t I.t) = create_generic ~build_instr:hard_macro_ram inputs

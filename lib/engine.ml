@@ -109,7 +109,24 @@ open Signal
                                a zero-extended data byte).
                  3 PIPE_CTRL   payload[0] reset the stream, payload[1] idle
                                line level for NRZI, payload[2] reload the
-                               CRC only.)
+                               CRC only. Transmit pipe (txpipe.ml):
+                               payload[3] reset the TX stream (idle level
+                               payload[1] too), payload[4] start appending
+                               the CRC. Profile table (profile_table.ml):
+                               payload[5] point the RX pipe and payload[6]
+                               the TX pipe at profile pin_sel[1:0]. When an
+                               instruction selects a profile, its reset /
+                               CRC actions fire one cycle later, so they
+                               load the NEW profile's CRC init.)
+   opcode 01 with payload[1] = 1 is EMIT_TX (transmit pipe): drives the
+               selected pin with the transmit pipe's next line bit
+               (shift-out, CRC append, stuff insert, NRZI encode -- see
+               txpipe.ml) instead of `mode`. payload[0] = open-drain: a 0
+               drives low, a 1 releases the pin (I2C write data).
+               payload[2] = differential: the paired pin (pin_sel xor 1)
+               is driven with the complement in the same cycle (USB D-/D+,
+               RS-485). Stalls while the pipe needs a new byte and the TX
+               FIFO is empty.
    opcode 11 = BRANCH_COND  (single-cycle, always advances the fetch
                stage; payload's low pc_width bits are a branch
                target. Condition is a level check against the SAME
@@ -122,7 +139,11 @@ open Signal
                need this at all -- they're unrolled in program memory,
                same as the UART RX microcode's 8 unrolled data-bit
                waits -- BRANCH_COND exists specifically for the
-               protocol layer's data-dependent branches.)
+               protocol layer's data-dependent branches.
+               payload[9] = 1 (above the 9-bit target, 0 in every
+               earlier program) branches on an internal FLAG instead of a
+               pin, pin_sel choosing which: 0 = TX more (the transmit
+               pipe still has data, CRC or a stuff bit to send).)
 
    Instruction memory is a real read/write RAM, sized and addressed to
    match Loader.addr_width -- this is what makes the core actually
@@ -223,7 +244,11 @@ module I = struct
     write_addr   : 'a; [@bits 9]
     write_data   : 'a; [@bits 16]
     push_stall   : 'a;
-    bp_cfg       : 'a; [@bits 72]
+    rx_cfg       : 'a; [@bits 128]
+    tx_cfg       : 'a; [@bits 128]
+    tx_fifo_data : 'a; [@bits 16]
+    tx_fifo_empty : 'a;
+    ext_rx_crc_init : 'a;
   } [@@deriving sexp_of, hardcaml]
 end
 
@@ -238,6 +263,10 @@ module O = struct
     byte_data     : 'a; [@bits 8]
     capture_ready : 'a;
     capture_data  : 'a; [@bits 16]
+    tx_fifo_pop   : 'a;
+    sel_rx        : 'a;
+    sel_tx        : 'a;
+    sel_id        : 'a; [@bits 2]
   } [@@deriving sexp_of, hardcaml]
 end
 
@@ -292,8 +321,30 @@ let pipe_ctrl ~reset ~prev_level ~crc_init =
   pipe_sub 3 ~pin:0
     ~ops:((if reset then 1 else 0) lor (if prev_level then 2 else 0) lor if crc_init then 4 else 0)
 
+(* The full PIPE_CTRL: receive-pipe and transmit-pipe controls and profile
+   selection in one instruction. `profile` goes in pin_sel[1:0]. *)
+let pipe_ctrl_ext ?(reset = false) ?(prev_level = false) ?(crc_init = false) ?(tx_reset = false)
+    ?(tx_crc = false) ?(sel_rx = false) ?(sel_tx = false) ?(profile = 0) () =
+  let b c n = if c then 1 lsl n else 0 in
+  pipe_sub 3 ~pin:profile
+    ~ops:
+      (b reset 0 lor b prev_level 1 lor b crc_init 2 lor b tx_reset 3 lor b tx_crc 4 lor b sel_rx 5
+     lor b sel_tx 6)
+
+(* EMIT_TX: drive `pin` with the transmit pipe's next line bit. With
+   [open_drain] a 0 drives low and a 1 releases the pin. *)
+let emit_tx ?(open_drain = false) ?(differential = false) ~pin () =
+  encode ~opcode:1 ~pin ~mode:0
+    ~payload:(2 lor (if open_drain then 1 else 0) lor if differential then 4 else 0)
+
 let branch_cond ~pin ~branch_if_high ~target =
   encode ~opcode:3 ~pin ~mode:(if branch_if_high then 1 else 0) ~payload:target
+
+(* Branch on an internal flag (payload[9] = 1); flag 0 = TX more. *)
+let flag_tx_more = 0
+
+let branch_flag ~flag ~branch_if_set ~target =
+  encode ~opcode:3 ~pin:flag ~mode:(if branch_if_set then 1 else 0) ~payload:(0x200 lor target)
 
 let pc_width = Loader.addr_width
 let ram_depth = 1 lsl pc_width
@@ -397,6 +448,8 @@ let create_generic ~build_instr (inputs : Signal.t I.t) =
   let is_pipe_status = is_shift &&: mode &&: (pipe_sub_op ==:. 2) in
   let is_pipe_ctrl = is_shift &&: mode &&: (pipe_sub_op ==:. 3) in
   let is_normal_shift = is_shift &&: (~:mode) in
+  let is_emit_tx = is_emit &&: select payload 1 1 in
+  let is_flag_branch = is_branch &&: select payload 9 9 in
 
   (* Input pin mux: 1-of-8, selected by the current instruction's
      pin_sel. See the module-header note on the pin_sel_stable guard
@@ -440,16 +493,42 @@ let create_generic ~build_instr (inputs : Signal.t I.t) =
   (* Bit pipe (bitpipe.ml). `advance` is a forward wire, so `step` can depend
      on it while `would_push` (registered state only) feeds back into it
      without a combinational loop. *)
+  (* PIPE_CTRL. Profile selection takes effect at the next edge; reset and
+     CRC actions in the SAME instruction are delayed one cycle so they load
+     the newly selected profile's CRC init (see the module header). *)
+  let ctrl = advance &&: is_pipe_ctrl in
+  let pbit n = select payload n n in
+  let sel_rx = ctrl &&: pbit 5 in
+  let sel_tx = ctrl &&: pbit 6 in
+  let selecting = pbit 5 |: pbit 6 in
+  let now_or_later s =
+    let s_now = ctrl &&: s in
+    mux2 selecting gnd s_now |: reg spec (s_now &&: selecting)
+  in
+  let prev_level = mux2 (reg spec (ctrl &&: selecting)) (reg spec (pbit 1)) (pbit 1) in
   let bp =
     Bitpipe.create
       { Bitpipe.I.clk = inputs.clk
       ; rst_n = inputs.rst_n
-      ; cfg = inputs.bp_cfg
+      ; cfg = inputs.rx_cfg
       ; step = advance &&: is_pipe_bit
       ; line = rx_pin
-      ; ctrl_reset = advance &&: is_pipe_ctrl &&: payload_bit0
-      ; ctrl_crc_init = advance &&: is_pipe_ctrl &&: select payload 2 2
-      ; prev_init = select payload 1 1
+      ; ctrl_reset = now_or_later (pbit 0)
+      ; ctrl_crc_init = now_or_later (pbit 2) |: inputs.ext_rx_crc_init
+      ; prev_init = prev_level
+      }
+  in
+  let tx =
+    Txpipe.create
+      { Txpipe.I.clk = inputs.clk
+      ; rst_n = inputs.rst_n
+      ; cfg = inputs.tx_cfg
+      ; step = advance &&: is_emit_tx
+      ; ctrl_reset = now_or_later (pbit 3)
+      ; ctrl_crc_append = now_or_later (pbit 4)
+      ; prev_init = prev_level
+      ; fifo_data = inputs.tx_fifo_data
+      ; fifo_empty = inputs.tx_fifo_empty
       }
   in
   let would_push =
@@ -457,10 +536,16 @@ let create_generic ~build_instr (inputs : Signal.t I.t) =
     ||: is_capture ||: is_pipe_status
     ||: (is_pipe_bit &&: bp.Bitpipe.O.would_push)
   in
-  let shift_advance_ok = ~:(would_push &&: inputs.push_stall) in
+  let shift_advance_ok =
+    ~:((would_push &&: inputs.push_stall) |: (is_emit_tx &&: tx.Txpipe.O.would_stall))
+  in
   advance <== (inputs.run &&: mux2 is_wait wait_condition shift_advance_ok);
 
-  branch_taken <== (is_branch &&: mux2 mode rx_pin (~:rx_pin));
+  (* internal flags for BRANCH_COND's flag form, selected by pin_sel *)
+  let flags = [ tx.Txpipe.O.more ] in
+  let flag = mux pin_sel (flags @ List.init (8 - List.length flags) (fun _ -> gnd)) in
+  let cond = mux2 is_flag_branch flag rx_pin in
+  branch_taken <== (is_branch &&: mux2 mode cond (~:cond));
   branch_target <== select payload (pc_width - 1) 0;
 
   pc <==
@@ -471,9 +556,17 @@ let create_generic ~build_instr (inputs : Signal.t I.t) =
      Only the pin EMIT_STATE currently targets latches a new level;
      the other 7 hold whatever they last held, same contract the
      single tx_pin register had. *)
+  (* `advance` rather than `run`: an EMIT_TX can stall, and a stalled one
+     must not latch anything. EMIT_STATE never stalls, so for it the two
+     are the same. *)
+  let emit_level = mux2 is_emit_tx tx.Txpipe.O.line mode in
+  (* differential EMIT_TX also writes the paired pin, complemented *)
+  let is_diff = is_emit_tx &&: pbit 2 in
+  let pair_hit i = advance &&: is_diff &&: (pin_sel ==:. i lxor 1) in
   let out_reg i =
     reg_fb ~enable:(one 1) spec ~width:1 ~f:(fun cur ->
-      mux2 (inputs.run &&: is_emit &&: (pin_sel ==:. i)) mode cur)
+      mux2 (advance &&: is_emit &&: (pin_sel ==:. i)) emit_level
+        (mux2 (pair_hit i) (~:(tx.Txpipe.O.line)) cur))
   in
   let pins_out = concat_msb (List.init 8 (fun i -> out_reg (7 - i))) in
 
@@ -483,9 +576,11 @@ let create_generic ~build_instr (inputs : Signal.t I.t) =
      "drive" (oe=1), set means "release" (oe=0) regardless of `mode`.
      Resets to 0 so an untouched pin defaults to a safe input, not an
      accidental driver. *)
+  (* EMIT_TX open-drain (payload bit 0): drive only the 0s, release the 1s *)
+  let emit_oe = mux2 is_emit_tx (~:(payload_bit0 &&: tx.Txpipe.O.line)) (~:payload_bit0) in
   let oe_reg i =
     reg_fb ~enable:(one 1) spec ~width:1 ~f:(fun cur ->
-      mux2 (inputs.run &&: is_emit &&: (pin_sel ==:. i)) (~:payload_bit0) cur)
+      mux2 (advance &&: is_emit &&: (pin_sel ==:. i)) emit_oe (mux2 (pair_hit i) vdd cur))
   in
   let pins_oe = concat_msb (List.init 8 (fun i -> oe_reg (7 - i))) in
 
@@ -567,6 +662,10 @@ let create_generic ~build_instr (inputs : Signal.t I.t) =
   ; byte_data
   ; capture_ready
   ; capture_data
+  ; tx_fifo_pop = tx.Txpipe.O.fifo_pop
+  ; sel_rx
+  ; sel_tx
+  ; sel_id = select pin_sel 1 0
   }
 
 (* Every existing testbench calls this one -- behavioral RAM, fully

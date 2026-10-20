@@ -29,8 +29,9 @@ AXIOM=/path/to/Axiom/.axiom-bin/axiom ./test.sh
 
 `test.sh` builds `tdasm` and checks two things:
 
-- The three examples assemble to exactly the prescale, config bytes and program words that `test/gen_vectors.ml` produces (`gl_test/*_vectors.json` in this repo). Those are the same vectors cocotb replays against the shipped Verilog and the gate-level netlist.
+- The four examples assemble to exactly the prescale, config bytes and program words that `test/gen_vectors.ml` produces (`gl_test/*_vectors.json` in this repo). Those are the same vectors cocotb replays against the shipped Verilog and the gate-level netlist.
 - Every file in `tests/bad/` is refused with the expected error message.
+- `.profile` bytes land at config index 32N + k.
 
 ## Source syntax
 
@@ -41,7 +42,8 @@ Comments start with `;` or `#`. Operands are separated by spaces or commas. Numb
 | Directive | Meaning |
 |---|---|
 | `.prescale N` | Timer prescale byte (0–255). Required. It's the first byte sent after reset. |
-| `.cfg B ...` | Bit-pipe / glitch-filter config bytes, up to 9 in total across lines (layout in `bitpipe.ml`). Sent with `cfg_sel`. |
+| `.cfg B ...` | Bytes of bit-pipe profile 0 (also the glitch filter), up to 16 in total across lines (layout in `bitpipe.ml`). Sent with `cfg_sel`. |
+| `.profile N B ...` | Bytes of profile N (0–3), up to 16. Profile N byte k is config index 32N + k (`profile_table.ml`); the loader's index counts up from 0, so every profile up to the last one used is sent, padded to 32 bytes. |
 | `.phys` | The lines that follow belong to µE0, the physical-layer engine. |
 | `.protocol` | The lines that follow belong to µE1, the protocol engine. |
 | `.word N` | A raw 16-bit word, in either engine. |
@@ -58,8 +60,10 @@ Comments start with `;` or `#`. Operands are separated by spaces or commas. Numb
 | `capture P` | Timestamped trace record of pin P into the FIFO. |
 | `pipe_bit P` | Bit pipe: one sample of pin P through NRZI, un-stuffing and CRC. |
 | `pipe_status` | Push the bit-pipe status word (bit 15 set). |
-| `pipe_ctrl [reset] [idle_high] [crc_init]` | Bit-pipe control flags. |
+| `pipe_ctrl [reset] [idle_high] [crc_init] [tx_reset] [tx_crc] [sel_rx] [sel_tx] [p0..p3]` | Bit-pipe controls: receive-pipe reset / idle level / CRC reload, transmit-pipe reset and CRC append, and pointing the receive or transmit pipe at profile `pN`. |
+| `emit_tx P [open_drain] [diff]` | EMIT_TX: drive pin P with the transmit pipe's next line bit. `open_drain` drives the 0s and releases the 1s; `diff` also drives pin P xor 1 with the complement. |
 | `br_high P T` / `br_low P T` | BRANCH_COND on the current level of pin P. |
+| `br_flag F T` / `br_noflag F T` | BRANCH_COND on internal flag F (0–7, or `tx_more` = 0: the transmit pipe still has data, CRC or a stuff bit to send). |
 
 ### µE1 (`.protocol`), from `protocol_engine.ml`
 
@@ -69,6 +73,10 @@ Comments start with `;` or `#`. Operands are separated by spaces or commas. Numb
 | `emit P L` / `release P` | Same as on µE0, applied to µE1's own pins. |
 | `br_bit1 B T` / `br_bit0 B T` | BRANCH_COND_WORD on bit B (0–15) of the last popped word. |
 | `br_high P T` / `br_low P T` | BRANCH_PIN on the level of pin P. |
+| `tx_push B [last]` | Push byte B into the TX FIFO for µE0's transmit pipe (waits while it is full). `last` marks a packet's final byte. |
+| `tx_echo [last]` | Push the low byte of the last popped word. |
+| `cfg_wr I [hi]` | Write the low (or with `hi`, the high) byte of the last popped word into profile-table index I (0–127). |
+| `profile N [rx] [tx] [crc_init]` | Point the receive and/or transmit pipe at profile N (0–3); `crc_init` reloads the receive CRC from the new profile. |
 
 ## Load script (`--load`)
 
@@ -88,6 +96,7 @@ The order and checksum follow `dual_loader.ml`: the prescale byte, then the conf
 | `examples/spi_master.tds` | SPI master: sends 0xA5, reads a byte back, flags its MSB. |
 | `examples/i2c_master_read.tds` | I2C master read with an ACK check and STOP. |
 | `examples/usb_rx.tds` | USB low-speed receive through the bit pipe, with the CRC result on a flag pin. |
+| `examples/usb_tx.tds` | USB low-speed transmit: µE1 pushes a DATA0 packet, µE0 sends it through the transmit pipe on differential D-/D+ with the CRC appended, then the EOP. |
 
 ## Notes
 

@@ -71,14 +71,12 @@ let protocol_prog =
 let lo x = x land 0xFF
 let hi x = (x lsr 8) land 0xFF
 
+(* profile 0, written through the profile table's load port *)
 let cfg ~glitch =
-  let bytes =
-    [ 0b011011 (* nrzi, stuff, crc, reflected; ones-only stuffing; LSB-first *)
-    ; 6 lor (glitch lsl 4)
-    ; (2 lsl 4) lor 15 (* crc_skip = 2 (SYNC, PID), 16-bit *)
-    ; lo 0xA001; hi 0xA001; lo 0xFFFF; hi 0xFFFF; lo 0xB001; hi 0xB001 ]
-  in
-  Bits.concat_msb (List.rev_map (fun b -> Bits.of_int ~width:8 b) bytes)
+  [ 0b011011 (* nrzi, stuff, crc, reflected; ones-only stuffing; LSB-first *)
+  ; 6 lor (glitch lsl 4)
+  ; (2 lsl 4) lor 15 (* crc_skip = 2 (SYNC, PID), 16-bit *)
+  ; lo 0xA001; hi 0xA001; lo 0xFFFF; hi 0xFFFF; lo 0xB001; hi 0xB001 ]
 
 (* ---- reference transmitter (independent of the hardware) ---- *)
 let bits_of_byte_lsb b = List.init 8 (fun i -> (b lsr i) land 1)
@@ -147,10 +145,17 @@ let simulate ~b ~glitch_n ~t0 ~t_wait ?(glitches = []) symbols =
   inputs.prescale := Bits.of_int ~width:8 0;
   inputs.run := Bits.gnd;
   inputs.protocol_run := Bits.gnd;
-  inputs.bp_cfg := cfg ~glitch:glitch_n;
   for _ = 1 to 4 do cycle () done;
   inputs.rst_n := Bits.vdd;
   cycle ();
+  List.iteri
+    (fun k b ->
+      inputs.cfg_addr := Bits.of_int ~width:7 k;
+      inputs.cfg_data := Bits.of_int ~width:8 b;
+      inputs.cfg_we := Bits.vdd;
+      cycle ())
+    (cfg ~glitch:glitch_n);
+  inputs.cfg_we := Bits.gnd;
   List.iteri
     (fun i w ->
       inputs.phys_write_addr := Bits.of_int ~width:9 i;

@@ -1,0 +1,55 @@
+; USB low-speed transmit: uE1 decides a DATA0 packet at run time and
+; uE0 sends it through the transmit pipe (NRZI, bit stuffing, CRC16
+; appended complemented), D+ driven as D-'s complement in the same
+; cycle, then the end-of-packet. Same program and profile as
+; gen_vectors.ml's usb_tx_program / usb_tx_protocol_prog /
+; usb_tx_cfg_bytes: 33 cycles a bit (1.5 Mbit/s at 50 MHz), prescale 0.
+;   uio pins: 0 D-, 1 D+
+
+.prescale 0
+
+; Profile 0 (bitpipe.ml layout). The transmit pipe reads the same
+; profile layout the receive pipe does.
+.cfg 0x9B           ; NRZI, stuffing, CRC, reflected, LSB first, CRC sent complemented
+.cfg 0x06           ; stuff after 6 ones, glitch filter off
+.cfg 0x2F           ; CRC width 16, CRC skips 2 bytes (SYNC + PID)
+.cfg 0x01 0xA0      ; CRC16 polynomial, reflected (0xA001)
+.cfg 0xFF 0xFF      ; CRC init 0xFFFF
+.cfg 0x01 0xB0      ; good-packet residue 0xB001
+
+.phys
+        pipe_ctrl tx_reset idle_high    ; clear the TX stream, idle line is J
+        emit 0 1                        ; J: D- high
+        emit 1 0                        ;    D+ low
+data:   wait_fall 7 30                  ; one bit cell (with the loop: 33 cycles)
+        emit_tx 0 diff                  ; next line bit on D-, its complement on D+
+        br_flag tx_more data            ; until the last byte's last bit (and any stuff bit)
+        pipe_ctrl tx_crc                ; switch the bit source to the CRC
+        wait_fall 7 29                  ; the pipe_ctrl took the cycle back
+        emit_tx 0 diff
+        release 7                       ; no-op standing in for the branch
+crc:    wait_fall 7 30
+        emit_tx 0 diff
+        br_flag tx_more crc
+        wait_fall 7 30
+        emit 0 0                        ; SE0
+        emit 1 0
+        wait_fall 7 64                  ; two bit cells
+        emit 0 1                        ; J
+        wait_fall 7 30
+        release 0
+        release 1
+        halt
+
+.protocol
+        tx_push 0x80                    ; SYNC
+        tx_push 0xC3                    ; DATA0
+        tx_push 0x80                    ; GET_DESCRIPTOR setup data
+        tx_push 0x06
+        tx_push 0x00
+        tx_push 0x01
+        tx_push 0x00
+        tx_push 0x00
+        tx_push 0x40
+        tx_push 0x00 last               ; the packet's last byte
+        pop                             ; nothing more to do: wait forever

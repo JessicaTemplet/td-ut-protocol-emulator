@@ -1,4 +1,4 @@
-"""SPI and I2C masters through tt_um_dual's real pins, on the shipped Verilog.
+"""SPI, I2C and USB through tt_um_dual's real pins, on the shipped Verilog.
 
 Replays the same microcode and checks as test/test_tt_um_dual_spi.ml and
 test/test_tt_um_dual_i2c.ml (Cyclesim) against the actual netlist (RTL with the
@@ -13,7 +13,12 @@ external device on uio.
     path through the SRAM-backed netlist); check the address byte the slave
     captured, the SCL edge count, and DATA_FLAG.
 
-Microcode comes from {spi,i2c}_vectors.json (regenerate: run_gen_vectors.sh).
+  * USB low speed: receive a packet through the bit pipe (good and corrupted),
+    and transmit one through the transmit pipe (data decided at run time by
+    uE1), compared cell by cell with the reference encoder's line.
+
+Microcode comes from {spi,i2c,usb,usb_tx}_vectors.json (regenerate:
+run_gen_vectors.sh).
 Written to run under cocotb 1.8 and 2.x.
 """
 
@@ -164,6 +169,40 @@ async def usb_low_speed_receive_corrupted_packet(dut):
     ok, done = await usb_packet(dut, vec["bad_symbols"])
     assert done == (True, True), f"flag_done not driven high: {done}"
     assert ok == (True, False), f"corrupted USB packet was not rejected: {ok}"
+
+
+@cocotb.test()
+async def usb_low_speed_transmit(dut):
+    """USB low-speed DATA0 transmit: µE1 pushes the packet at run time, µE0's
+    EMIT_TX sends it through the transmit pipe (NRZI, bit stuffing, CRC16
+    appended complemented) on D-, with D+ driven as its complement in the
+    same cycle, then the EOP. Sampled mid-cell against the reference line."""
+    vec = vectors("usb_tx_vectors.json")
+    pin = vec["pins"]
+    dm, dp = pin["dm"], pin["dp"]
+    await load_and_go(dut, vec)
+    cell, symbols = vec["cell"], vec["symbols"]
+    total = 200 + (len(symbols) + 4) * cell
+    trace = []
+    for cyc in range(total):
+        await RisingEdge(dut.clk)
+        await Timer(1, "ns")
+        resolved(dut, cyc, total)
+        trace.append((int(dut.uio_out.value), int(dut.uio_oe.value)))
+    # the packet starts with SYNC's first K: D- driven low
+    start = next(
+        (i for i, (o, e) in enumerate(trace) if (e >> dm) & 1 and not (o >> dm) & 1), None
+    )
+    assert start is not None, "D- never went to K: nothing was transmitted"
+    got = []
+    for k in range(len(symbols)):
+        o, e = trace[start + k * cell + cell // 2]
+        assert (e >> dm) & 1 and (e >> dp) & 1, f"D-/D+ not both driven in cell {k}"
+        d_m, d_p = (o >> dm) & 1, (o >> dp) & 1
+        got.append(2 if (d_m, d_p) == (0, 0) else d_m)
+        if k < len(symbols) - 3:
+            assert d_p == 1 - d_m, f"cell {k}: D+ is not the complement of D-"
+    assert got == symbols, f"line symbols differ from the reference encoder:\n{got}\n{symbols}"
 
 
 @cocotb.test()
