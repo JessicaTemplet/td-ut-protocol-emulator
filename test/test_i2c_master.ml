@@ -194,16 +194,25 @@ let run_scenario ~slave_acks =
   let addr_captured = ref 0 in
   let prev_scl = ref 1 in
 
+  (* A half period costs its WAIT (payload + 1 cycles) plus up to two
+     single-cycle pin instructions. This budget once assumed half_period
+     flat, which only fit because timer.ml used to cut a WAIT that follows
+     a release_pin short -- i.e. SCL's high phase was 1-2 cycles. *)
+  let half_cycles = half_period + 3 in
   let total_cycles =
-    3 + (2 * half_period) (* start *)
-    + (8 * (2 * half_period)) (* addr bits *)
-    + (2 * half_period) (* ack1 *)
-    + (8 * (2 * half_period)) (* data bits *)
-    + (2 * half_period) (* master nack *)
-    + (3 * half_period) (* stop *)
+    3 + (2 * half_cycles) (* start *)
+    + (8 * (2 * half_cycles)) (* addr bits *)
+    + (2 * half_cycles) (* ack1 *)
+    + (8 * (2 * half_cycles)) (* data bits *)
+    + (2 * half_cycles) (* master nack *)
+    + (3 * half_cycles) (* stop *)
     + 30
   in
-  for _ = 1 to total_cycles do
+  (* shortest SCL high phase, rise to fall: I2C's tHIGH. The master holds
+     SCL released for one half-period WAIT, so it must be at least
+     half_period cycles. *)
+  let min_high = ref max_int and rise_t = ref 0 in
+  for t = 1 to total_cycles do
     let master_out = Bits.to_int !(outputs.phys_pins_out) in
     let master_oe = Bits.to_int !(outputs.phys_pins_oe) in
     let master_drives_sda_low = ((master_oe lsr sda) land 1 = 1) && ((master_out lsr sda) land 1 = 0) in
@@ -217,9 +226,11 @@ let run_scenario ~slave_acks =
          timing hazard capturing here (see module header) *)
       if !edge_index < 8 then
         addr_captured := (!addr_captured lsl 1) lor sda_net;
-      incr edge_index
+      incr edge_index;
+      rise_t := t
     end;
     if cur_scl = 0 && !prev_scl = 1 then begin
+      if !rise_t > 0 then min_high := min !min_high (t - !rise_t);
       (* falling edge: decide what the slave presents for the NEXT
          rising edge *)
       if !edge_index < 8 then slave_drive := 1 (* address phase: slave never drives *)
@@ -238,7 +249,11 @@ let run_scenario ~slave_acks =
   let phys_pc = Bits.to_int !(outputs.phys_pc) in
   let fifo_empty = Bits.to_int !(outputs.fifo_empty) = 1 in
   let addr_ok = !addr_captured = addr_rw_byte in
+  let high_ok = !min_high >= half_period in
+  Printf.printf "  shortest SCL high phase: %d cycles (must be >= half_period = %d)\n" !min_high half_period;
 
+  high_ok
+  &&
   if slave_acks then begin
     let protocol_pins_out = Bits.to_int !(outputs.protocol_pins_out) in
     let data_flag_bit = (protocol_pins_out lsr data_flag) land 1 in

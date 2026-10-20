@@ -177,13 +177,16 @@ let () =
   let addr_captured = ref 0 in
   let prev_scl = ref 1 in
 
+  (* a half period costs its WAIT (payload + 1 cycles) plus up to two
+     single-cycle pin instructions; see test_i2c_master.ml *)
+  let half_cycles = half_period + 3 in
   let total_cycles =
-    3 + (2 * half_period)
-    + (8 * (2 * half_period))
-    + (2 * half_period)
-    + (8 * (2 * half_period))
-    + (2 * half_period)
-    + (3 * half_period)
+    3 + (2 * half_cycles)
+    + (8 * (2 * half_cycles))
+    + (2 * half_cycles)
+    + (8 * (2 * half_cycles))
+    + (2 * half_cycles)
+    + (3 * half_cycles)
     + 30
   in
   for _ = 1 to total_cycles do

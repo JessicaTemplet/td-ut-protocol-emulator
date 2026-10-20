@@ -173,7 +173,9 @@ async def i2c_master_read_through_real_pins(dut):
     sda, scl = pin["sda"], pin["scl"]
     await load_and_go(dut, vec)
 
-    hp = vec["half_period"]
+    # a half period costs its WAIT (payload + 1 cycles) plus up to two
+    # single-cycle pin instructions (see test/test_i2c_master.ml)
+    hp = vec["half_period"] + 3
     total = (
         3 + 2 * hp + 8 * (2 * hp) + 2 * hp + 8 * (2 * hp) + 2 * hp + 3 * hp + 30
     )

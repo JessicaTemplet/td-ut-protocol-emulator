@@ -53,7 +53,14 @@ let create (inputs : Signal.t I.t) =
   (* ---- Main down-counter: decrements only on a tick ---- *)
   let main_cnt = wire 10 in
   let main_zero = main_cnt ==: zero 10 in
-  let expired = busy &&: tick &&: main_zero in
+  (* Never on a `load` cycle: the engine re-arms the timer after EVERY
+     instruction (load = reg advance) with that instruction's payload, so
+     the counter a WAIT inherits on its first cycle belongs to the
+     instruction before it. When that payload was 1 (release_pin,
+     shift_in_push, ...) the inherited counter is already 0 and the WAIT
+     used to expire on its first cycle instead of after its own payload
+     (found by test_dual_tx.ml: a timed WAIT after a release_pin nop). *)
+  let expired = busy &&: tick &&: main_zero &&: (~:(inputs.load)) in
 
   busy <==
     reg_fb ~enable:(one 1) spec ~width:1 ~f:(fun b ->
