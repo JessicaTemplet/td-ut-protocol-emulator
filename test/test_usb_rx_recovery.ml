@@ -177,6 +177,17 @@ let simulate ?(pre_low = 0) ~phys ~cfg ~pt ~j ?(seed = 1) syms =
   in
   load i.phys_write_enable i.phys_write_addr i.phys_write_data phys;
   load i.protocol_write_enable i.protocol_write_addr i.protocol_write_data protocol_prog;
+  let pins_of s =
+    let dmv = if s = 1 then 1 else 0 and dpv = if s = 0 then 1 else 0 in
+    Bits.of_int ~width:8 ((dmv lsl dm) lor (dpv lsl dp))
+  in
+  (* the line already shows its t=0 state when the engines start: hold it
+     through Dual's input synchronizer first, so the engines' first cycle
+     sees it rather than the level driven during loading *)
+  i.pins_in := pins_of (if pre_low > 0 then 2 else 1);
+  for _ = 1 to Dual.sync_latency do
+    cycle ()
+  done;
   i.run := Bits.vdd;
   i.protocol_run := Bits.vdd;
   let total = int_of_float b.(n) + 400 in
@@ -185,8 +196,7 @@ let simulate ?(pre_low = 0) ~phys ~cfg ~pt ~j ?(seed = 1) syms =
     let tf = float_of_int t in
     while !k < n && b.(!k + 1) <= tf do incr k done;
     let s = if t < pre_low then 2 else if tf < b.(0) || !k >= n then 1 else syms.(!k) in
-    let dmv = if s = 1 then 1 else 0 and dpv = if s = 0 then 1 else 0 in
-    i.pins_in := Bits.of_int ~width:8 ((dmv lsl dm) lor (dpv lsl dp));
+    i.pins_in := pins_of s;
     cycle ();
     let pc = Bits.to_int !(o.phys_pc) in
     samples := pc :: !samples

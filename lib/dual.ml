@@ -104,6 +104,8 @@ end
 module O = struct
   type 'a t = {
     phys_pc           : 'a; [@bits 9]
+    phys_halted       : 'a;
+    protocol_halted   : 'a;
     phys_pins_out      : 'a; [@bits 8]
     phys_pins_oe       : 'a; [@bits 8]
     protocol_pc        : 'a; [@bits 9]
@@ -126,6 +128,11 @@ end
    tapeout Verilog generation uses). See engine.ml's module header for
    why these can't be the same functions (Cyclesim can't simulate
    through the hard-macro path). *)
+(* Cycles from a level change on `pins_in` to the first cycle either engine
+   can see it (the input synchronizer below). Testbenches that drive pins
+   on exact cycles use this instead of a literal. *)
+let sync_latency = 2
+
 let create_generic ~engine_create ~protocol_create (inputs : Signal.t I.t) =
   let push_stall = wire 1 in
   let e0_sel_rx = wire 1 and e0_sel_tx = wire 1 and e0_sel_id = wire 2 in
@@ -149,6 +156,16 @@ let create_generic ~engine_create ~protocol_create (inputs : Signal.t I.t) =
       ; e1_sel_id
       }
   in
+  (* Two-flop synchronizer on every input pin, ahead of everything else.
+     The pins are asynchronous to clk, and one sampled level fans out to
+     many flops in the same cycle (edge detect, the branch decision that
+     picks the next pc, the shift register, the bit pipe). Unsynchronized,
+     an edge landing near a clock edge could be seen by some of those flops
+     and not others -- e.g. a branch whose pc bits disagree on taken/not
+     taken. Same 2-FF pattern dual_loader.ml uses for strobe/go. Costs two
+     cycles of input latency, identical for every pin and for loopback. *)
+  let sync_spec = Reg_spec.create ~clock:inputs.clk ~clear:((~:) inputs.rst_n) () in
+  let pins_sync = reg sync_spec (reg sync_spec inputs.pins_in) in
   (* Per-pin glitch filter on the shared pin bus, configured by profile 0
      byte 1 bits [7:4] (0 = bypass, so invisible unless a program's config
      asks for it). Both engines see the filtered pins. *)
@@ -157,7 +174,7 @@ let create_generic ~engine_create ~protocol_create (inputs : Signal.t I.t) =
        { Glitch_filter.I.clk = inputs.clk
        ; rst_n = inputs.rst_n
        ; run = inputs.run
-       ; pins_in = inputs.pins_in
+       ; pins_in = pins_sync
        ; n = table.Profile_table.O.glitch_n
        }).Glitch_filter.O.pins_out
   in
@@ -241,6 +258,8 @@ let create_generic ~engine_create ~protocol_create (inputs : Signal.t I.t) =
   protocol_crc_init <== protocol_out.Protocol_engine.O.rx_crc_init;
 
   { O.phys_pc = engine_out.Engine.O.pc
+  ; phys_halted = engine_out.Engine.O.halted
+  ; protocol_halted = protocol_out.Protocol_engine.O.halted
   ; phys_pins_out = engine_out.Engine.O.pins_out
   ; phys_pins_oe = engine_out.Engine.O.pins_oe
   ; protocol_pc = protocol_out.Protocol_engine.O.pc

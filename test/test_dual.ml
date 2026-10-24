@@ -85,17 +85,23 @@ let () =
      existed, since µE0 takes 8 cycles per byte -- the FIFO would
      never reach full and backpressure would go untested (see dual.ml's
      header comment). *)
-  inputs.run := Bits.vdd;
-
   (* Feed the 5 bytes' bits one per cycle, back to back -- the 5th
      byte's last bit is held steady once µE0 stalls on the full FIFO,
-     since a stalled SHIFT_IO retries using whatever pins_in shows. *)
+     since a stalled SHIFT_IO retries using whatever pins_in shows.
+     Dual's input synchronizer delays the pins by Dual.sync_latency
+     cycles, so the stream starts that many cycles before µE0 runs and
+     the last bit is held that many cycles after: µE0 sees exactly one
+     bit per cycle from its first running cycle. *)
   let all_bits = List.concat_map bits_of_byte byte_values in
-  List.iter
-    (fun b ->
+  List.iteri
+    (fun k b ->
+      if k = Dual.sync_latency then inputs.run := Bits.vdd;
       inputs.pins_in := Bits.of_int ~width:8 b;
       cycle ())
     all_bits;
+  for _ = 1 to Dual.sync_latency do
+    cycle ()
+  done;
 
   let phys_pc_at_stall = Bits.to_int !(outputs.phys_pc) in
   let fifo_full_at_stall = Bits.to_int !(outputs.fifo_full) = 1 in

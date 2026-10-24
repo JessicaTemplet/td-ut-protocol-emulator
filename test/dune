@@ -183,3 +183,8 @@
  (name test_tt_um_dual_eth)
  (modules test_tt_um_dual_eth)
  (libraries hardcaml tt_core))
+
+(executable
+ (name test_halt_guard)
+ (modules test_halt_guard)
+ (libraries hardcaml tt_core))

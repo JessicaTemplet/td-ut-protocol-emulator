@@ -104,6 +104,7 @@ end
 module O = struct
   type 'a t = {
     pc        : 'a; [@bits 9]
+    halted    : 'a;
     pins_out  : 'a; [@bits 8]
     pins_oe   : 'a; [@bits 8]
     fifo_pop  : 'a;
@@ -190,6 +191,13 @@ let create_generic ~build_instr (inputs : Signal.t I.t) =
   let branch_target = wire pc_width in
   let next_pc = mux2 advance (mux2 branch_taken branch_target (pc +:. 1)) pc in
 
+  (* Program-overrun guard (halt_guard.ml): `run` below is the external
+     run gated by it, and every use of run in this engine goes through it. *)
+  let halted =
+    Halt_guard.create ~spec ~write_enable:inputs.write_enable ~write_addr:inputs.write_addr ~pc
+  in
+  let run = inputs.run &&: (~:halted) in
+
   let instr =
     build_instr
       ~clk:inputs.clk
@@ -216,7 +224,7 @@ let create_generic ~build_instr (inputs : Signal.t I.t) =
   let is_push = is_tx_push |: is_tx_echo in
 
   advance
-  <== (inputs.run
+  <== (run
       &&: mux2 is_pop (~:(inputs.fifo_empty)) (mux2 is_push (~:(inputs.tx_fifo_full)) vdd));
 
   (* Pop exactly on the cycle a FIFO_POP instruction completes --
@@ -249,13 +257,13 @@ let create_generic ~build_instr (inputs : Signal.t I.t) =
 
   let out_reg i =
     reg_fb ~enable:(one 1) spec ~width:1 ~f:(fun cur ->
-      mux2 (inputs.run &&: is_emit &&: (pin_sel ==:. i)) mode cur)
+      mux2 (run &&: is_emit &&: (pin_sel ==:. i)) mode cur)
   in
   let pins_out = concat_msb (List.init 8 (fun i -> out_reg (7 - i))) in
 
   let oe_reg i =
     reg_fb ~enable:(one 1) spec ~width:1 ~f:(fun cur ->
-      mux2 (inputs.run &&: is_emit &&: (pin_sel ==:. i)) (~:payload_bit0) cur)
+      mux2 (run &&: is_emit &&: (pin_sel ==:. i)) (~:payload_bit0) cur)
   in
   let pins_oe = concat_msb (List.init 8 (fun i -> oe_reg (7 - i))) in
 
@@ -263,6 +271,7 @@ let create_generic ~build_instr (inputs : Signal.t I.t) =
   let tx_byte = mux2 is_tx_echo (select rx_word 7 0) (select payload 7 0) in
   let do_profile = advance &&: is_profile in
   { O.pc
+  ; halted
   ; pins_out
   ; pins_oe
   ; fifo_pop

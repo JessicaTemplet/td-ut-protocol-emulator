@@ -278,6 +278,7 @@ module O = struct
     pins_out      : 'a; [@bits 8]
     pins_oe       : 'a; [@bits 8]
     pc            : 'a; [@bits 9]
+    halted        : 'a;
     byte_ready    : 'a;
     byte_data     : 'a; [@bits 8]
     capture_ready : 'a;
@@ -456,6 +457,13 @@ let create_generic ~build_instr (inputs : Signal.t I.t) =
      register always agree on what "next" means. *)
   let next_pc = mux2 advance (mux2 branch_taken branch_target (pc +:. 1)) pc in
 
+  (* Program-overrun guard (halt_guard.ml): `run` below is the external
+     run gated by it, and every use of run in this engine goes through it. *)
+  let halted =
+    Halt_guard.create ~spec ~write_enable:inputs.write_enable ~write_addr:inputs.write_addr ~pc
+  in
+  let run = inputs.run &&: (~:halted) in
+
   let instr =
     build_instr
       ~clk:inputs.clk
@@ -574,7 +582,7 @@ let create_generic ~build_instr (inputs : Signal.t I.t) =
       ; cfg = inputs.rx_cfg
       ; step =
           (advance &&: bit_step)
-          |: (inputs.run &&: is_run &&: rec_.Clock_recovery.O.bit_valid)
+          |: (run &&: is_run &&: rec_.Clock_recovery.O.bit_valid)
       ; line = mux2 is_run rec_.Clock_recovery.O.bit_value rx_pin
       ; ctrl_reset = rx_reset
       ; ctrl_crc_init = now_or_later (pbit 2) |: inputs.ext_rx_crc_init
@@ -607,7 +615,7 @@ let create_generic ~build_instr (inputs : Signal.t I.t) =
        |: (is_pipe_status &&: rec_.Clock_recovery.O.margin_busy)
        |: (is_run &&: (~:(rec_.Clock_recovery.O.frame_end))))
   in
-  advance <== (inputs.run &&: mux2 is_wait wait_condition shift_advance_ok);
+  advance <== (run &&: mux2 is_wait wait_condition shift_advance_ok);
 
   (* internal flags for BRANCH_COND's flag form, selected by pin_sel *)
   (* a byte the run mode could not hand over: µE1 left the FIFO full. Sticky
@@ -720,7 +728,7 @@ let create_generic ~build_instr (inputs : Signal.t I.t) =
   elapsed <==
     reg_fb ~enable:(one 1) spec ~width:12 ~f:(fun cur ->
       mux2 capture_now (zero 12)
-        (mux2 (inputs.run &&: (~:(cur ==:. 0xFFF))) (cur +:. 1) cur));
+        (mux2 (run &&: (~:(cur ==:. 0xFFF))) (cur +:. 1) cur));
   let capture_data_now = concat_msb [ pin_sel; rx_pin; elapsed ] in
   (* PIPE_STATUS pushes through the same registered push port as CAPTURE;
      it does not touch the capture `elapsed` counter. *)
@@ -741,11 +749,12 @@ let create_generic ~build_instr (inputs : Signal.t I.t) =
   in
   let capture_data = reg spec (mux2 status_now status_word capture_data_now) in
 
-  { O.sample_pulse = inputs.run &&: is_shift
+  { O.sample_pulse = run &&: is_shift
   ; sampled_bit = rx_pin
   ; pins_out
   ; pins_oe
   ; pc
+  ; halted
   ; byte_ready
   ; byte_data
   ; capture_ready

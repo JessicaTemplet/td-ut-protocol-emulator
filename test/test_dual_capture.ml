@@ -75,9 +75,14 @@ let () =
 
   (* Both engines run together -- FIFO_POP already stalls on empty, so
      there's no need to stagger start like test_dual.ml's deliberate
-     backpressure scenario; that mechanism is proven separately. *)
-  inputs.run := Bits.vdd;
-  inputs.protocol_run := Bits.vdd;
+     backpressure scenario; that mechanism is proven separately. They start
+     Dual.sync_latency cycles into the pin stream below, so the input
+     synchronizer's delay lines each pin level up with the instruction
+     meant to sample it. *)
+  let start_engines () =
+    inputs.run := Bits.vdd;
+    inputs.protocol_run := Bits.vdd
+  in
 
   (* pin2=1, pin4=0 held constant for the two CAPTURE cycles; pin0
      toggles through byte_value's bits for the shift_in/shift_in_push
@@ -92,8 +97,9 @@ let () =
 
   let popped = ref [] in
   let last_protocol_pc = ref (Bits.to_int !(outputs.protocol_pc)) in
-  List.iter
-    (fun pins ->
+  List.iteri
+    (fun k pins ->
+      if k = Dual.sync_latency then start_engines ();
       inputs.pins_in := Bits.of_int ~width:8 pins;
       cycle ();
       let pc_now = Bits.to_int !(outputs.protocol_pc) in

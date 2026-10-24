@@ -330,3 +330,4 @@ module Txpipe = Txpipe
 module Clock_recovery = Clock_recovery
 module Profile_table = Profile_table
 module Glitch_filter = Glitch_filter
+module Halt_guard = Halt_guard

@@ -1,5 +1,6 @@
 #!/bin/bash
-# Mutation check for the transmit path and the profile table. Each entry
+# Mutation check for the transmit path, the profile table, the input
+# synchronizer and the halt guard. Each entry
 # below injects one deliberate hardware fault into a scratch copy of the
 # sources; the transmit and profile tests (test_txpipe, test_dual_tx,
 # test_usb_transaction) must FAIL on every one. A mutation that survives is
@@ -23,7 +24,7 @@ eval "$(opam env --switch=hardcaml-env)"
 WORK=$(mktemp -d "$HOME/.tx-mutation.XXXXXX")
 trap 'rm -rf "$WORK"' EXIT
 
-TESTS="test_txpipe test_dual_tx test_usb_transaction test_clock_recovery test_usb_rx_recovery test_link_health test_ethernet"
+TESTS="test_txpipe test_dual_tx test_usb_transaction test_clock_recovery test_usb_rx_recovery test_link_health test_ethernet test_dual test_halt_guard"
 
 # name # file # text to find (must occur exactly once) # replacement
 MUTATIONS=(
@@ -56,6 +57,9 @@ MUTATIONS=(
   "sync-word hunt never starts#lib/bitpipe.ml#mux2 i.ctrl_reset c.sync_en#mux2 i.ctrl_reset gnd"
   "octet CRC ignored (dribble bits fail)#lib/bitpipe.ml#let crc_ok = mux2 c.octet_crc crc_octet crc ==: c.residue in#let crc_ok = crc ==: c.residue in"
   "PIPE_BIT run does not wait for the frame end#lib/engine.ml#       |: (is_run &&: (~:(rec_.Clock_recovery.O.frame_end))))#)"
+  "input synchronizer removed#lib/dual.ml#let pins_sync = reg sync_spec (reg sync_spec inputs.pins_in) in#let pins_sync = inputs.pins_in in"
+  "halt guard never trips#lib/halt_guard.ml#  (loaded <>:. 0) &&: (uresize pc width >=: loaded)#  gnd"
+  "halt guard ignores branches past the program (tracks the first write only)#lib/halt_guard.ml#mux2 (write_enable &&: (addr >=: cur)) (addr +:. 1) cur#mux2 (write_enable &&: (cur ==:. 0)) (addr +:. 1) cur"
 )
 
 caught=0
