@@ -378,3 +378,56 @@ device rejects, which is wrong for an emulator. The chip hands the host the synd
 - Mutation check: margin keeping the last edge instead of the worst, a 32 instead of 64 scale, the status word dropping
   the margin, and `crc_lo` reading the high half are each caught; 22 of 22 in all. Not exercised by any test: the
   `PIPE_STATUS` wait for the divider, because every program here issues `PIPE_STATUS` long after the last edge.
+
+### Deviation 11: 10 Mbit Ethernet receive, and what 5 clocks a bit actually tolerates (2026-10-24)
+
+**What changed.** A bit is 100 ns: 5 clocks at 50 MHz, 7 at 70 MHz. No instruction loop keeps up with that, so the
+hardware decodes and µE0 runs one instruction per frame (`PIPE_BIT run`), stalled until the frame ends while bytes flow
+to µE1.
+- **Manchester mode in the clock recovery.** The phase locks to mid-bit edges. An edge within P/4 of where one is due
+  is a mid-bit edge and corrects the phase; one further off is a cell boundary and is masked. The bit is the line level
+  when the zone closes, a quarter cell after the mid-bit point. Two missing mid-bit edges end the
+  frame; bits are handed out one slot late so the sample at the first miss (idle line) is never delivered. Arming snaps
+  on a rising edge (a preamble's first falling edge is a cell boundary).
+- **Sync-word hunt** in the receive pipe (generic, profile byte 22/23): nothing is delivered until the last 8 bits equal
+  the sync word (Ethernet's start-of-frame delimiter, 0xD5), so a receiver that locks partway through the preamble
+  still aligns.
+- **Octet CRC** (profile byte 23 bit 1): crc_ok is judged at the last whole byte, as IEEE 802.3 has a receiver truncate
+  dribble bits; `aligned` still reports them.
+- CRC-32 is the existing 32-bit CRC with Ethernet's polynomial, init and residue in the profile. A lost-byte flag
+  (BRANCH_COND flag 2) reports bytes the run could not hand over because µE1 left the FIFO full.
+
+**How the decoder got there (each step measured).**
+1. A whole-cycle acceptance window lost frames at 0.25 cycle of jitter: with a learned, fractional phase a genuine
+   mid-bit edge 1.2 cycles off fell outside a window of 1. Manchester now classifies at P/4, the midpoint between a
+   mid-bit edge and a boundary, at full fixed-point resolution.
+2. Taking each bit from its edge and ending the frame at the first missing edge ended frames in their preamble: one edge
+   pushed past P/4 while the loop was acquiring. Hence the level fallback and the two-miss rule.
+3. Where to take the bit: sampling earlier than the zone's close did worse (it can fire before a late but still
+   accepted mid-bit edge); taking it from the mid-bit edge's direction measured the same as the level at the zone's
+   close, and the mutation check could not tell the two apart, so the simpler level sample is what is built.
+4. Period learning, which USB needs, only adds noise here (the standard allows +-0.01%): it is off in the Ethernet
+   profile, and the phase gain shift is 2 at 5 clocks a bit and 3 at 7 (from a sweep, `ETH_SWEEP=1`).
+5. The remaining frame failures had every byte right and a failed CRC: the line's return to idle, jittered, was now and
+   then taken as one more bit. That is exactly 802.3's dribble bit, hence the octet CRC rather than suppressing it.
+6. My first bit-error measurement read the decoder's outputs after the clock edge, against stale inputs, and reported
+   thousands of errors that did not exist; read at the same point as everything else, the decoder alone is clean.
+
+**What it tolerates (measured, `test_ethernet` and `ETH_BITERR=1`).** At 5 clocks a bit the P/4 budget is 1.25 cycles,
+which must cover the edge jitter, a whole cycle of quantization (an edge is seen up to one clock late) and phase noise.
+- 50 MHz: 30 of 30 frames at the standard's +-0.01% with up to +-0.5 cycle (10 ns) of edge jitter, and no decoder bit
+  errors in 20 streams of ~1000 bits at 0.5 cycle; at 0.6 cycle the decoder slips.
+- 70 MHz: 30 of 30 frames with up to +-0.75 cycle (10.7 ns); the decoder alone is clean in steady state up to about
+  +-1.0 cycle (14 ns), with its few errors there during acquisition in the preamble, where a flipped preamble bit can fake
+  the delimiter (2 of 3 frames at 1.0 cycle).
+- Whether that meets 10BASE-T's receive jitter requirement has to be checked against IEEE 802.3 clause 14 before any
+  compliance claim; I could not confirm the clause's figure, so none is claimed. What is claimed is the measured table.
+- The off-chip front end (transformer, squelch, a comparator to one logic pin) is not part of the chip; the tests drive
+  TTL-level Manchester, as a bench FPGA or microcontroller would.
+
+**Verified.** `test_ethernet`: reference CRC-32 checked against the standard check value (0xCBF43926 for "123456789")
+and the residue 0xDEBB20E3; 64- to 124-byte frames byte for byte at 5 and 7 clocks a bit; the tolerance table; late
+lock with 3 of 7 preamble bytes; a flipped bit and a truncated frame rejected; dribble bits accepted with the octet CRC
+and failed without; the lost-byte flag. Through the real pins in Cyclesim (`test_tt_um_dual_eth`) and on the shipped
+Verilog in cocotb (`ethernet_receive`), on one committed vector. Mutation check: seven Manchester, hunt, octet-CRC and
+run faults added, each caught (29 of 29 in all). Not re-hardened yet; the 70 MHz attempt comes with the harden.

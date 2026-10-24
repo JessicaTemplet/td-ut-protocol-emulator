@@ -346,8 +346,77 @@ let usb_rec_line ~offset ~jitter symbols =
     while !k < n && b.(!k + 1) <= tf do incr k done;
     if tf < b.(0) || !k >= n then 1 else syms.(!k))
 
+(* ---- 10 Mbit Ethernet receive at 50 MHz (5 clocks a bit; same program
+   and profile as test_ethernet.ml): Manchester decoding in the clock
+   recovery, a hunt for the start-of-frame delimiter, CRC-32 judged at the
+   last whole byte. One 64-byte frame with +-0.25 cycle of edge jitter, and
+   the same frame with one data bit flipped; one line symbol per clock
+   cycle, jitter from a fixed LCG. ---- *)
+let eth_rx = 0
+let eth_flag_ok = 2
+let eth_flag_done = 3
+let eth_flag_lost = 5
+
+let eth_cfg_bytes =
+  let fixed = 5 * 256 in
+  [ 0x58; 0; 15; 0x20; 0x83; 0xFF; 0xFF; 0xE3; 0x20; 0xB8; 0xED; 0xFF; 0xFF; 0xBB; 0xDE; 0
+  ; 1 lor (eth_rx lsl 1) lor (2 lsl 4) lor 0x80; fixed land 0xFF; (fixed lsr 8) land 0xFF; (fixed lsr 16) land 0x0F
+  ; 1; 0; 0xD5; 3 ]
+
+let eth_program =
+  Engine.
+    [ branch_cond ~pin:eth_rx ~branch_if_high:false ~target:0
+    ; pipe_ctrl ~reset:true ~prev_level:false ~crc_init:false
+    ; pipe_run ~pin:eth_rx
+    ; branch_flag ~flag:flag_rx_lost ~branch_if_set:false ~target:5
+    ; emit_state ~pin:eth_flag_lost ~level:true
+    ; pipe_status
+    ; wait_edge ~pin:7 ~falling:true ~payload:0
+    ]
+
+let eth_protocol_prog =
+  Protocol_engine.
+    [ fifo_pop_instr
+    ; branch_word ~bit:15 ~branch_if_one:false ~target:0
+    ; branch_word ~bit:0 ~branch_if_one:false ~target:5
+    ; emit_state ~pin:eth_flag_ok ~level:true
+    ; branch_word ~bit:15 ~branch_if_one:true ~target:6
+    ; emit_state ~pin:eth_flag_ok ~level:false
+    ; emit_state ~pin:eth_flag_done ~level:true
+    ; fifo_pop_instr
+    ]
+
+let eth_crc32 bytes =
+  let c = ref 0xFFFFFFFF in
+  List.iter (fun b -> List.iter (fun bit -> let fb = (!c land 1) lxor bit in c := !c lsr 1; if fb = 1 then c := !c lxor 0xEDB88320) (bits_of_byte_lsb b)) bytes;
+  !c lxor 0xFFFFFFFF
+
+let eth_frame =
+  let body = [ 0xFF; 0xFF; 0xFF; 0xFF; 0xFF; 0xFF; 0x02; 0x00; 0x5E; 0x10; 0x00; 0x01; 0x08; 0x00 ]
+             @ List.init 46 (fun k -> (k * 37) land 0xFF) in
+  let fcs = eth_crc32 body in
+  body @ List.init 4 (fun k -> (fcs lsr (8 * k)) land 0xFF)
+
+let eth_line ~jitter bytes =
+  let seed = ref 4242 in
+  let rnd () = seed := ((!seed * 1103515245) + 12345) land 0x7FFFFFFF; float_of_int (!seed lsr 8) /. 8388608.0 in
+  let bits = Array.of_list (List.concat_map bits_of_byte_lsb (List.init 7 (fun _ -> 0x55) @ [ 0xD5 ] @ bytes)) in
+  let n = Array.length bits in
+  let h = Array.init ((2 * n) + 1) (fun m -> 40.0 +. (float_of_int m *. 2.5) +. (if m > 0 then (rnd () *. 2.0 *. jitter) -. jitter else 0.0)) in
+  let level m = if m >= 2 * n then 1 else (let b = bits.(m / 2) in if m land 1 = 0 then 1 - b else b) in
+  let m = ref 0 in
+  List.init (int_of_float h.(2 * n) + 100) (fun t ->
+    let tf = float_of_int t in
+    if tf < h.(0) then 1 else (while !m < 2 * n && h.(!m + 1) <= tf do incr m done; level !m))
+
 let () =
   match Array.to_list Sys.argv with
+  | [ _; "eth" ] ->
+    let bad = List.mapi (fun k b -> if k = 20 then b lxor 0x10 else b) eth_frame in
+    Printf.printf
+      "{\n  \"prescale\": 0,\n  \"cfg\": %s,\n  \"pins\": {\"rx\": %d, \"flag_ok\": %d, \"flag_done\": %d, \"flag_lost\": %d},\n  \"phys\": %s,\n  \"protocol\": %s,\n  \"good_line\": %s,\n  \"bad_line\": %s\n}\n"
+      (json_list eth_cfg_bytes) eth_rx eth_flag_ok eth_flag_done eth_flag_lost (json_list eth_program)
+      (json_list eth_protocol_prog) (json_list (eth_line ~jitter:0.25 eth_frame)) (json_list (eth_line ~jitter:0.25 bad))
   | [ _; "usb_rec" ] ->
     let good = usb_packet_symbols usb_payload in
     let bad = List.mapi (fun i s -> if i = 40 then 1 - s else s) good in

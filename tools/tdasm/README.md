@@ -29,7 +29,7 @@ AXIOM=/path/to/Axiom/.axiom-bin/axiom ./test.sh
 
 `test.sh` builds `tdasm` and checks two things:
 
-- The five examples assemble to exactly the prescale, config bytes and program words that `test/gen_vectors.ml` produces (`gl_test/*_vectors.json` in this repo). Those are the same vectors cocotb replays against the shipped Verilog and the gate-level netlist.
+- The six examples assemble to exactly the prescale, config bytes and program words that `test/gen_vectors.ml` produces (`gl_test/*_vectors.json` in this repo). Those are the same vectors cocotb replays against the shipped Verilog and the gate-level netlist.
 - Every file in `tests/bad/` is refused with the expected error message.
 - `.profile` bytes land at config index 32N + k.
 
@@ -59,6 +59,7 @@ Comments start with `;` or `#`. Operands are separated by spaces or commas. Numb
 | `shift P` / `shift_push P` | SHIFT_IO: sample pin P into the byte accumulator. The `_push` form also hands the byte to µE1. |
 | `capture P` | Timestamped trace record of pin P into the FIFO. |
 | `pipe_bit P [sync]` | Bit pipe: one sample of pin P through NRZI, un-stuffing and CRC. With `sync` it first waits for the bit-clock recovery's sample strobe. |
+| `pipe_run P` | Wait for the end of a Manchester frame on pin P while the clock recovery's decoded bits step the receive pipe (10 Mbit Ethernet: one instruction per frame). |
 | `pipe_sync` | Wait for the bit-clock recovery's sample strobe without sampling (check the line, then `pipe_bit`). |
 | `pipe_status` | Push the bit-pipe status word: bit 15 set, bytes, the clock recovery's timing margin (bits 7..3, 64ths of a bit), byte-aligned, stuffing error, CRC ok. |
 | `pipe_crc_lo` / `pipe_crc_hi` | Push the receive CRC register's low / high half: XORed with the residue, a bad packet's syndrome. |
@@ -66,7 +67,7 @@ Comments start with `;` or `#`. Operands are separated by spaces or commas. Numb
 | `pipe_ctrl [reset] [idle_high] [crc_init] [tx_reset] [tx_crc] [sel_rx] [sel_tx] [p0..p3]` | Bit-pipe controls: receive-pipe reset / idle level / CRC reload, transmit-pipe reset and CRC append, and pointing the receive or transmit pipe at profile `pN`. |
 | `emit_tx P [open_drain] [diff]` | EMIT_TX: drive pin P with the transmit pipe's next line bit. `open_drain` drives the 0s and releases the 1s; `diff` also drives pin P xor 1 with the complement. |
 | `br_high P T` / `br_low P T` | BRANCH_COND on the current level of pin P. |
-| `br_flag F T` / `br_noflag F T` | BRANCH_COND on internal flag F (0–7, `tx_more` = 0: the transmit pipe still has data, CRC or a stuff bit to send, `rec_overrun` = 1: the clock recovery's sample strobe was missed). |
+| `br_flag F T` / `br_noflag F T` | BRANCH_COND on internal flag F (0–7, `tx_more` = 0: the transmit pipe still has data, CRC or a stuff bit to send, `rec_overrun` = 1: the clock recovery's sample strobe was missed, `rx_lost` = 2: `pipe_run` found the FIFO full and lost a byte). |
 
 ### µE1 (`.protocol`), from `protocol_engine.ml`
 
@@ -100,6 +101,7 @@ The order and checksum follow `dual_loader.ml`: the prescale byte, then the conf
 | `examples/i2c_master_read.tds` | I2C master read with an ACK check and STOP. |
 | `examples/usb_rx.tds` | USB low-speed receive through the bit pipe, with the CRC result on a flag pin. |
 | `examples/usb_rx_rec.tds` | USB low-speed receive sampling from the bit-clock recovery: no calibrated waits, tolerates a sender off by 1.5%. |
+| `examples/eth_rx.tds` | 10 Mbit Ethernet receive at 50 MHz: Manchester decoding, delimiter hunt and CRC-32 in hardware, one µE0 instruction per frame. |
 | `examples/usb_tx.tds` | USB low-speed transmit: µE1 pushes a DATA0 packet, µE0 sends it through the transmit pipe on differential D-/D+ with the CRC appended, then the EOP. |
 
 ## Notes

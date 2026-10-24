@@ -52,6 +52,27 @@ open Signal
    clears it (`consume`). A strobe that finds `pending` still set means
    the program fell a whole bit behind; `overrun` is set until `arm`.
 
+   Manchester mode (profile byte 16 bit 7; 10BASE-T): every bit has a
+   transition at its middle, low-to-high for a 1 (IEEE 802.3), and a cell
+   boundary has one only between two equal bits. The phase is locked to
+   the MID-BIT edges: an edge within P/4 of where one is due is one, and
+   corrects the phase; an edge further off is a boundary transition and is
+   masked (not a reject, not in the margin). The bit itself is the line
+   level a quarter cell after the mid-bit point (a Manchester bit equals
+   its second half), so an edge misjudged under jitter costs a little
+   phase, not a bit. Two mid-bit edges missing in a row mean the frame has
+   ended (`frame_end`, sticky until arm); bits are handed out one slot
+   late (`bit_valid`, `bit_value`) so the sample taken where the first of
+   those edges was missing, idle line rather than data, is never
+   delivered. (The first version took the bit from the edge and ended the
+   frame at the first missing edge: one edge pushed past P/4 by jitter
+   while the loop was still acquiring ended the frame in its preamble.)
+   Arming snaps on a RISING edge only: a frame's preamble starts with a 1,
+   whose leading boundary edge (idle high to low) falls and whose mid-bit
+   edge rises. There is no sample strobe in this mode; µE0's `PIPE_BIT
+   run` lets these bits step the receive pipe directly, because at 5 to 7
+   clocks a bit no instruction loop keeps up.
+
    Configuration (profile bytes 16-20, see bitpipe.ml): rec_en, the pin,
    the gain shift, P, and the window in whole cycles (0 = accept all).
    Keep the window under P/4: a correction near mid-bit could otherwise
@@ -84,6 +105,9 @@ module O = struct
     period      : 'a; [@bits 21] (* the bit period in use, 12.8 fixed point *)
     margin      : 'a; [@bits 5] (* worst edge error since arm, 64ths of a bit *)
     margin_busy : 'a; (* the margin is being recomputed *)
+    bit_valid   : 'a; (* Manchester: a bit was decoded this cycle *)
+    bit_value   : 'a;
+    frame_end   : 'a; (* Manchester: a mid-bit edge was missing (sticky) *)
   } [@@deriving sexp_of, hardcaml]
 end
 
@@ -111,7 +135,17 @@ let create (i : Signal.t I.t) =
   let neg = msb error in
   let mag = mux2 neg (negate error) error in
   let window = concat_msb [ zero (w - 8 - frac_bits); c.rec_window; zero frac_bits ] in
-  let within = (c.rec_window ==:. 0) |: (mag <=: window) in
+  (* Manchester: a mid-bit edge is expected at error 0 and a cell boundary at
+     P/2, so the best classifier is the midpoint, P/4, at full fixed-point
+     resolution. A whole-cycle window cannot do that at 5 clocks a bit:
+     with a learned (fractional) phase a genuine mid-bit edge at 1.2 cycles
+     fell outside a window of 1 and the frame "ended" (measured: frames
+     lost at 0.25 cycle of jitter); a window of 2 would let boundary edges,
+     2 to 3 cycles off, in. *)
+  let quarter = srl p 2 in
+  let within =
+    mux2 c.manchester (mag <: quarter) ((c.rec_window ==:. 0) |: (mag <=: window))
+  in
   (* error >> s rounded toward zero: shift the magnitude, restore the sign.
      A plain arithmetic shift rounds toward minus infinity, so a small early
      edge counts as -1/256 cycle and a small late one as 0. The closed loop
@@ -121,22 +155,56 @@ let create (i : Signal.t I.t) =
   let shift_toward_zero s = mux2 neg (negate (srl mag s)) (srl mag s) in
   let shifted = mux c.rec_gain (List.init 8 shift_toward_zero) in
 
+  let manch = c.manchester in
   let running = c.rec_en &&: (~:armed) in
   let accept = running &&: edge &&: within in
   let corr = mux2 accept shifted (zero w) in
   let v = phw +: one_cycle -: corr in
   let v_wrapped = mux2 (v >=: p) (v -: p) v in
-  let strobe = running &&: (phw <: half) &&: (v_wrapped >=: half) in
+  let strobe = running &&: (~:manch) &&: (phw <: half) &&: (v_wrapped >=: half) in
+  (* the edge that ends `armed`: any edge, or in Manchester mode a rising one *)
+  let snap = armed &&: edge &&: ((~:manch) |: line) in
 
   ph
   <== reg_fb ~enable:(one 1) spec ~width:ph_width ~f:(fun cur ->
         mux2 (i.arm |: (~:(c.rec_en))) (zero ph_width)
           (mux2 armed
-             (mux2 edge (uresize one_cycle ph_width) cur)
+             (mux2 snap (uresize one_cycle ph_width) cur)
              (uresize v_wrapped ph_width)));
   armed
   <== reg_fb ~enable:(one 1) spec ~width:1 ~f:(fun cur ->
-        mux2 i.arm vdd (mux2 edge gnd cur));
+        mux2 i.arm vdd (mux2 snap gnd cur));
+
+  (* Manchester frame end: once the phase is past the acceptance zone
+     around a mid-bit (P/4), that bit's edge must have come *)
+  let zone_end = quarter in
+  let check = running &&: manch &&: (phw <: zone_end) &&: (v_wrapped >=: zone_end) in
+  let zone_hit = wire 1 in
+  zone_hit
+  <== reg_fb ~enable:(one 1) spec ~width:1 ~f:(fun cur ->
+        mux2 (i.arm |: snap |: accept) (~:(i.arm)) (mux2 check gnd cur));
+  let hit = zone_hit |: accept in
+  (* consecutive missing mid-bit edges; the second ends the frame *)
+  let missed = wire 1 in
+  missed
+  <== reg_fb ~enable:(one 1) spec ~width:1 ~f:(fun cur ->
+        mux2 i.arm gnd (mux2 check (~:hit) cur));
+  let ending = check &: (~:hit) &: missed in
+  let frame_end =
+    reg_fb ~enable:(one 1) spec ~width:1 ~f:(fun cur -> mux2 i.arm gnd (cur |: ending))
+  in
+  (* the bit sampled at this check is handed out at the next one *)
+  let held_valid =
+    reg_fb ~enable:(one 1) spec ~width:1 ~f:(fun cur -> mux2 i.arm gnd (mux2 check (~:ending) cur))
+  in
+  (* The bit is the line level when the zone closes, a quarter cell after
+     the mid-bit point. Measured alternatives: taking the bit from the
+     direction of the mid-bit edge when one was seen did no better (and the
+     mutation check could not tell them apart), and sampling earlier did
+     worse, since it can fire before a late but still accepted mid-bit
+     edge. *)
+  let held_value = reg_fb ~enable:(one 1) spec ~width:1 ~f:(fun cur -> mux2 check line cur) in
+  let bit_valid = check &: held_valid &: (~:ending) &: (~:frame_end) in
 
   (* integral path: learn the period, within P +- P/16 *)
   let fstep = mux c.rec_fshift (List.init 8 shift_toward_zero) in
@@ -167,7 +235,9 @@ let create (i : Signal.t I.t) =
      edge it always has (USB: the EOP is two bit cells long). *)
   let dw = w + 6 in
   let worst = wire w in
-  let bigger = running &&: edge &&: (mag >: worst) in
+  (* in Manchester mode boundary transitions are expected, not errors *)
+  let measured = running &&: edge &&: ((~:manch) |: within) in
+  let bigger = measured &&: (mag >: worst) in
   worst
   <== reg_fb ~enable:(one 1) spec ~width:w ~f:(fun cur ->
         mux2 i.arm (zero w) (mux2 bigger mag cur));
@@ -200,10 +270,13 @@ let create (i : Signal.t I.t) =
   ; pending
   ; overrun
   ; edge_ok = accept
-  ; edge_reject = running &&: edge &&: (~:within)
+  ; edge_reject = running &&: edge &&: (~:within) &&: (~:manch)
   ; error
   ; armed
   ; period = p
   ; margin
   ; margin_busy = bigger |: start |: busy
+  ; bit_valid
+  ; bit_value = held_value
+  ; frame_end
   }

@@ -108,7 +108,10 @@ open Signal
                                (clock_recovery.ml), so the sample point
                                follows the sender's clock instead of a
                                timer. payload[1] = nostep: only that wait,
-                               no sample (`pipe_sync`).
+                               no sample (`pipe_sync`). payload[2] = run:
+                               wait for the end of a Manchester frame while
+                               the clock recovery's decoded bits step the
+                               pipe directly (`pipe_run`, 10 Mbit Ethernet).
                  2 PIPE_STATUS push a status word {1, bytes, margin, aligned,
                                stuff_err, crc_ok} to the FIFO; margin is
                                the clock recovery's worst edge error since
@@ -158,7 +161,8 @@ open Signal
                pin, pin_sel choosing which: 0 = TX more (the transmit
                pipe still has data, CRC or a stuff bit to send),
                1 = clock-recovery overrun (a sample strobe passed while
-               the previous one was still unconsumed).)
+               the previous one was still unconsumed), 2 = receive byte
+               lost (PIPE_BIT run found the FIFO full).)
 
    Instruction memory is a real read/write RAM, sized and addressed to
    match Loader.addr_width -- this is what makes the core actually
@@ -331,6 +335,13 @@ let pipe_bit_sync ~pin = pipe_sub 1 ~pin ~ops:1
    continue without stepping the pipe (the program inspects the line, e.g.
    for USB's SE0, and steps with a plain PIPE_BIT right after). *)
 let pipe_sync = pipe_sub 1 ~pin:0 ~ops:3
+
+(* PIPE_BIT run: wait for the end of a Manchester frame while the decoder
+   steps the pipe on every bit it decodes (10 Mbit Ethernet). *)
+let pipe_run ~pin = pipe_sub 1 ~pin ~ops:4
+
+let flag_rec_overrun = 1
+let flag_rx_lost = 2
 
 (* PIPE_STATUS: push one 16-bit status record {1, bytes[6:0], margin[4:0],
    aligned, stuff_err, crc_ok} to the FIFO. Bit 15 marks it as a status
@@ -540,7 +551,12 @@ let create_generic ~build_instr (inputs : Signal.t I.t) =
      checks for SE0 between the strobe and the step) *)
   let rx_reset = now_or_later (pbit 0) in
   let bit_sync = is_pipe_bit &&: pbit 0 in
-  let bit_step = is_pipe_bit &&: (~:(pbit 1)) in
+  (* PIPE_BIT payload[2] = run: µE0 waits here for the whole frame while the
+     Manchester decoder's bits step the pipe directly (one bit per 5 to 7
+     clocks is faster than any instruction loop); it moves on at the
+     frame's end *)
+  let is_run = is_pipe_bit &&: pbit 2 in
+  let bit_step = is_pipe_bit &&: (~:(pbit 1)) &&: (~:(pbit 2)) in
   let rec_ =
     Clock_recovery.create
       { Clock_recovery.I.clk = inputs.clk
@@ -556,8 +572,10 @@ let create_generic ~build_instr (inputs : Signal.t I.t) =
       { Bitpipe.I.clk = inputs.clk
       ; rst_n = inputs.rst_n
       ; cfg = inputs.rx_cfg
-      ; step = advance &&: bit_step
-      ; line = rx_pin
+      ; step =
+          (advance &&: bit_step)
+          |: (inputs.run &&: is_run &&: rec_.Clock_recovery.O.bit_valid)
+      ; line = mux2 is_run rec_.Clock_recovery.O.bit_value rx_pin
       ; ctrl_reset = rx_reset
       ; ctrl_crc_init = now_or_later (pbit 2) |: inputs.ext_rx_crc_init
       ; prev_init = prev_level
@@ -586,12 +604,17 @@ let create_generic ~build_instr (inputs : Signal.t I.t) =
     ~:((would_push &&: inputs.push_stall)
        |: (is_emit_tx &&: tx.Txpipe.O.would_stall)
        |: (bit_sync &&: (~:(rec_.Clock_recovery.O.pending)))
-       |: (is_pipe_status &&: rec_.Clock_recovery.O.margin_busy))
+       |: (is_pipe_status &&: rec_.Clock_recovery.O.margin_busy)
+       |: (is_run &&: (~:(rec_.Clock_recovery.O.frame_end))))
   in
   advance <== (inputs.run &&: mux2 is_wait wait_condition shift_advance_ok);
 
   (* internal flags for BRANCH_COND's flag form, selected by pin_sel *)
-  let flags = [ tx.Txpipe.O.more; rec_.Clock_recovery.O.overrun ] in
+  (* a byte the run mode could not hand over: µE1 left the FIFO full. Sticky
+     until the receive pipe's next reset. (A stepped PIPE_BIT stalls rather
+     than push into a full FIFO, so this can only happen in run mode.) *)
+  let lost = wire 1 in
+  let flags = [ tx.Txpipe.O.more; rec_.Clock_recovery.O.overrun; lost ] in
   let flag = mux pin_sel (flags @ List.init (8 - List.length flags) (fun _ -> gnd)) in
   let cond = mux2 is_flag_branch flag rx_pin in
   branch_taken <== (is_branch &&: mux2 mode cond (~:cond));
@@ -674,6 +697,9 @@ let create_generic ~build_instr (inputs : Signal.t I.t) =
      was caught by test_engine_push.ml comparing against pc_before and
      getting an apparently-one-instruction-early result before the fix. *)
   let byte_ready = reg spec byte_ready_now in
+  lost
+  <== reg_fb ~enable:(one 1) spec ~width:1 ~f:(fun cur ->
+        mux2 rx_reset gnd (cur |: (byte_ready &: inputs.push_stall)));
   let byte_data = reg spec (mux2 pipe_byte_done bp.Bitpipe.O.byte_data next_shift) in
 
   (* CAPTURE datapath: `elapsed` is a free-running 12-bit counter,

@@ -58,20 +58,34 @@ open Signal
      Bit-clock recovery (clock_recovery.ml; receive only):
      16: [0] rec_en  [3:1] the pin it tracks  [6:4] gain shift: an edge
                moves the phase by (error >> shift), 0 = snap to the edge
-               [7] reserved (0)
+               [7] manchester: the line is Manchester coded (10BASE-T);
+                   the unit decodes bits from mid-bit edges itself
      17:    bit period, fractional part (1/256 cycle)
      18,19: bit period, integer cycles (12 bits; [15:12] reserved, 0)
      20:    acceptance window in whole cycles: an edge further than this
             from where a bit boundary is expected is ignored. 0 = accept
-            every edge.
+            every edge. Not used in Manchester mode, which accepts an
+            edge as mid-bit within P/4 (the midpoint between a mid-bit
+            edge and a cell boundary).
      21: [0] freq_en: also learn the sender's bit period  [3:1] its gain
             shift: an edge moves the period estimate by (error >> shift)
             [7:4] reserved (0)
-     22..23: reserved (0)
+     Sync-word hunt (receive only):
+     22:    the sync word: the last 8 delivered bits, first bit in bit 0
+            (Ethernet's start-of-frame delimiter: 0xD5)
+     23: [0] sync_en: after a reset, deliver nothing (no bytes, no CRC, no
+            stuffing state) until the last 8 bits equal byte 22; the bit
+            after the match is a frame's first. A receiver that locks
+            partway through a preamble still aligns to the frame.
+         [1] octet CRC: the status word's crc_ok is the CRC as it stood
+            after the last whole byte, so bits after it ("dribble bits",
+            which IEEE 802.3 has a receiver truncate) do not fail a good
+            frame; `aligned` still reports them
+         [7:2] reserved (0)
    Bytes 0..8 are the original 9-byte configuration, unchanged, so every
    configuration written before the profile table still means the same
    thing (bytes 9..15 zero = a CRC of at most 16 bits; byte 16 zero = no
-   clock recovery).
+   clock recovery; byte 23 zero = no hunt).
    All-zero profile = every stage off: the unit degenerates to a plain
    byte assembler (and the transmit pipe to a plain LSB-first shifter).
 
@@ -112,6 +126,10 @@ type cfg =
   ; rec_window : Signal.t (* 8 bits, whole cycles *)
   ; rec_freq_en : Signal.t
   ; rec_fshift : Signal.t (* 3 bits *)
+  ; manchester : Signal.t
+  ; sync_word : Signal.t (* 8 bits *)
+  ; sync_en : Signal.t
+  ; octet_crc : Signal.t
   }
 
 let decode_cfg cfg =
@@ -139,6 +157,10 @@ let decode_cfg cfg =
   ; rec_window = byte 20
   ; rec_freq_en = bit (byte 21) 0
   ; rec_fshift = select (byte 21) 3 1
+  ; manchester = bit (byte 16) 7
+  ; sync_word = byte 22
+  ; sync_en = bit (byte 23) 0
+  ; octet_crc = bit (byte 23) 1
   }
 
 (* The run-length rule both directions share. A stuff bit is due when the
@@ -216,9 +238,23 @@ let create (i : Signal.t I.t) =
   let is_stuff, (next_cnt_data, next_bit_data), (next_cnt_stuff, next_bit_stuff) =
     stuff_rule c ~run_cnt ~run_bit ~data
   in
+  (* 0. sync-word hunt: until the last 8 bits match the sync word, steps
+     only feed the hunt register (NRZI history still follows the line) *)
+  let hunting = wire 1 in
+  let sync_sr = wire 8 in
+  let sr_next = concat_msb [ data; select sync_sr 7 1 ] in
+  sync_sr
+  <== reg_fb ~enable:(one 1) spec ~width:8 ~f:(fun cur ->
+        mux2 i.ctrl_reset (zero 8) (mux2 (i.step &&: hunting) sr_next cur));
+  hunting
+  <== reg_fb ~enable:(one 1) spec ~width:1 ~f:(fun cur ->
+        mux2 i.ctrl_reset c.sync_en
+          (mux2 (i.step &&: cur &&: (sr_next ==: c.sync_word)) gnd cur));
+  let step_live = i.step &&: (~:hunting) in
+
   let delivered = ~:is_stuff in
   let stuff_bad = is_stuff &&: (data ==: run_bit) in
-  let step_delivered = i.step &&: delivered in
+  let step_delivered = step_live &&: delivered in
 
   prev
   <== reg_fb ~enable:(one 1) spec ~width:1 ~f:(fun cur ->
@@ -226,14 +262,14 @@ let create (i : Signal.t I.t) =
   run_cnt
   <== reg_fb ~enable:(one 1) spec ~width:3 ~f:(fun cur ->
         mux2 i.ctrl_reset (zero 3)
-          (mux2 i.step (mux2 is_stuff next_cnt_stuff next_cnt_data) cur));
+          (mux2 step_live (mux2 is_stuff next_cnt_stuff next_cnt_data) cur));
   run_bit
   <== reg_fb ~enable:(one 1) spec ~width:1 ~f:(fun cur ->
         mux2 i.ctrl_reset vdd
-          (mux2 i.step (mux2 is_stuff next_bit_stuff next_bit_data) cur));
+          (mux2 step_live (mux2 is_stuff next_bit_stuff next_bit_data) cur));
   stuff_err
   <== reg_fb ~enable:(one 1) spec ~width:1 ~f:(fun cur ->
-        mux2 i.ctrl_reset gnd (cur |: (i.step &&: stuff_bad)));
+        mux2 i.ctrl_reset gnd (cur |: (step_live &&: stuff_bad)));
 
   (* 3. CRC over delivered bits, once `crc_skip` bytes have been delivered *)
   let crc_started = nbytes >=: uresize c.crc_skip 7 in
@@ -256,7 +292,13 @@ let create (i : Signal.t I.t) =
   <== reg_fb ~enable:(one 1) spec ~width:7 ~f:(fun cur ->
         mux2 i.ctrl_reset (zero 7) (mux2 byte_done (cur +:. 1) cur));
 
-  let crc_ok = crc ==: c.residue in
+  (* the CRC after the last whole byte, for octet_crc (dribble bits) *)
+  let crc_after = mux2 (c.crc_en &&: crc_started) (crc_step c ~crc ~data) crc in
+  let crc_octet =
+    reg_fb ~enable:(one 1) spec ~width:crc_bits ~f:(fun cur ->
+      mux2 (i.ctrl_reset |: i.ctrl_crc_init) c.init (mux2 byte_done crc_after cur))
+  in
+  let crc_ok = mux2 c.octet_crc crc_octet crc ==: c.residue in
   (* status record pushed by PIPE_STATUS: bit 15 marks it as a status word
      (data bytes are zero-extended, so bit 15 is 0 for them) *)
   let status =
@@ -264,7 +306,7 @@ let create (i : Signal.t I.t) =
   in
   { O.byte_done
   ; byte_data = acc_next
-  ; would_push = (bitcnt ==:. 7) &&: delivered
+  ; would_push = (bitcnt ==:. 7) &&: delivered &&: (~:hunting)
   ; status
   ; crc
   ; crc_ok

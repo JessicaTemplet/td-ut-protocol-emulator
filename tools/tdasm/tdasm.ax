@@ -492,8 +492,8 @@
       ops
     }))
 
-; A flag number for br_flag / br_noflag: 0..7, `tx_more` (0) or
-; `rec_overrun` (1).
+; A flag number for br_flag / br_noflag: 0..7, `tx_more` (0),
+; `rec_overrun` (1) or `rx_lost` (2).
 ;@axiom:effect(io)
 (:: flagOperand (-> Asm Int (Vec String) Int Int))
 (fn (flagOperand a lineNo ts i)
@@ -501,6 +501,8 @@
     0
     (&& (< i (vecLen ts)) (strEq (tok ts i) "rec_overrun"))
     1
+    (&& (< i (vecLen ts)) (strEq (tok ts i) "rx_lost"))
+    2
     (operand
       a
       lineNo
@@ -621,6 +623,20 @@
         "pin"
         7)))
         (enc 2 pin 1 (| 256 (flagsFrom a ln ts 2))))
+      (strEq m "pipe_run")
+      ; PIPE_BIT run: wait for a Manchester frame's end while the decoder
+      ; steps the pipe (10 Mbit Ethernet)
+      (let ((pin (operand
+        a
+        ln
+        ts
+        1
+        "pin"
+        7)))
+        {
+          (arity a ln ts 1)
+          (enc 2 pin 1 260)
+        })
       (strEq m "pipe_sync")
       ; PIPE_BIT sync + nostep: wait for the strobe, do not sample
       {

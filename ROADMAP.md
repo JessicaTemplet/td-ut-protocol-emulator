@@ -21,8 +21,9 @@ bit-stuffing, CRC), a glitch filter, and a USB low-speed receive demo (items 6 a
 chip is re-hardened once. Done so far: a transmit path that mirrors the bit pipe, with data decided at run time by µE1,
 a runtime profile table (separate receive and transmit profiles, switched and rewritten while running), and bit-clock
 recovery (a second-order digital PLL the receive loop samples from), and link-health reporting (timing margin in the
-status word, CRC syndrome, learned period). Next: 10 Mbit Ethernet receive, then a 70 MHz harden attempt (50 MHz
-fallback). See Deviations 8 to 10 and Build log sections 9 to 11. The last hardened numbers below are from before this work.
+status word, CRC syndrome, learned period), and 10 Mbit Ethernet receive (Manchester decoding, delimiter hunt and CRC-32
+in hardware, one µE0 instruction per frame). Next: the harden, attempting 70 MHz (50 MHz fallback). See Deviations 8
+to 11 and Build log sections 9 to 12. The last hardened numbers below are from before this work.
 
 ## The original 10-item plan, and what happened to each
 
@@ -72,8 +73,9 @@ fallback). See Deviations 8 to 10 and Build log sections 9 to 11. The last harde
 - Done since (not yet hardened): the transmit path, the runtime profile table, and USB transactions mixing CRC5 tokens
   and CRC16 data in one run.
 - Done since (not yet hardened): per-edge resync for a real 1.5%-tolerant USB link (bit-clock recovery).
+- Done since (not yet hardened): Manchester decoding and 10 Mbit Ethernet receive.
 - Not built: windowed interval validation (the glitch filter's second stage), CAN as a full program through the pins,
-  and Manchester decoding for 10 Mbit Ethernet.
+  and Ethernet transmit.
 
 Sequencing: A first so a valid entry exists; then C (it is the novelty claim, and the gate budget has room for it);
 B items as time allows. Each step in B and C ends with the full loop: regression, harden, precheck, gate-level bench.
@@ -454,7 +456,24 @@ All checks passed on the first run. **Verified:** `test_link_health` (exact marg
 80-of-80 syndromes located, learned period, the degraded flag ahead of CRC failure), the same flag through the pins
 and in cocotb, mutation check 22 of 22, `tdasm` parity. Not yet hardened.
 
-## 12. Practical notes
+## 12. 10 Mbit Ethernet receive
+
+Reasons, the six measured steps that shaped the decoder, and the tolerance table are in
+`docs/design/design_rationale.txt`, Deviation 11.
+
+- `clock_recovery.ml`: Manchester mode (P/4 classification, the level a quarter cell after the mid-bit point, two-miss
+  frame end, one-slot delay, rising-edge arm). `bitpipe.ml`: sync-word hunt and octet CRC (profile bytes 22 and 23). `engine.ml`:
+  `PIPE_BIT run` and the lost-byte flag.
+- `test_ethernet` (with `ETH_SWEEP` and `ETH_BITERR` as measurement tools), `test_tt_um_dual_eth`, cocotb
+  `ethernet_receive`, `tdasm` `eth_rx.tds`.
+- Found along the way, besides the decoder steps: with the FIFO full, `PIPE_STATUS` waits forever, so a program checks
+  the lost-byte flag first; and two more shell-quoting slips (variables in an inline `bash -c` expanded in the wrong
+  shell), each failing loudly before touching anything.
+
+**Measured:** 50 MHz, 30/30 frames at +-0.01% with +-0.5 cycle (10 ns) of jitter; 70 MHz, 30/30 with +-0.75 cycle
+(10.7 ns). Not yet hardened.
+
+## 13. Practical notes
 
 - Dune quirk: `lib/tt_core.ml` shares its name with the library, which suppresses automatic submodule aliasing, so
   sibling modules need explicit `module X = X` lines in `tt_core.ml`.

@@ -207,6 +207,35 @@ async def usb_receive_with_clock_recovery(dut):
     assert degraded == (True, True), f"heavy jitter not flagged degraded: {degraded}"
 
 
+async def ethernet_frame(dut, line):
+    """10 Mbit Ethernet receive at 5 clocks a bit: Manchester decoding in the
+    clock recovery, delimiter hunt, CRC-32. `line` is one level per clock
+    cycle. Returns the (oe, level) of flag_ok, flag_done, flag_lost."""
+    vec = vectors("eth_vectors.json")
+    pin = vec["pins"]
+    await load_and_go(dut, vec)
+    for cyc, s in enumerate(line):
+        dut.uio_in.value = s << pin["rx"]
+        await RisingEdge(dut.clk)
+        await Timer(1, "ns")
+        resolved(dut, cyc, len(line))
+    out, oe = int(dut.uio_out.value), int(dut.uio_oe.value)
+    flag = lambda p: ((oe >> p) & 1 == 1, (out >> p) & 1 == 1)
+    return flag(pin["flag_ok"]), flag(pin["flag_done"]), flag(pin["flag_lost"])
+
+
+@cocotb.test()
+async def ethernet_receive(dut):
+    vec = vectors("eth_vectors.json")
+    ok, done, lost = await ethernet_frame(dut, vec["good_line"])
+    assert done == (True, True), f"flag_done not driven high: {done}"
+    assert ok == (True, True), f"Ethernet frame with good FCS not accepted: {ok}"
+    assert lost[1] is False, "a received byte was lost"
+    ok, done, _ = await ethernet_frame(dut, vec["bad_line"])
+    assert done == (True, True), f"flag_done not driven high (corrupted): {done}"
+    assert ok == (True, False), f"frame with a flipped bit not rejected: {ok}"
+
+
 @cocotb.test()
 async def usb_low_speed_transmit(dut):
     """USB low-speed DATA0 transmit: µE1 pushes the packet at run time, µE0's

@@ -1,0 +1,46 @@
+; 10 Mbit Ethernet receive at 50 MHz (5 clocks a bit). One instruction
+; covers the whole frame: the clock recovery decodes Manchester, the
+; receive pipe hunts for the start-of-frame delimiter and checks the
+; CRC-32, and uE1 sees every byte. Same program and profile as
+; gen_vectors.ml's eth_program / eth_protocol_prog / eth_cfg_bytes.
+;   uio pins: 0 RX (after an off-chip receiver), 2 FLAG_OK, 3 FLAG_DONE,
+;   5 LOST (a byte arrived while the FIFO was full)
+
+.prescale 0
+
+; Profile 0
+.cfg 0x58           ; CRC on, reflected, CRC width bit 4 (32 bits); LSB first
+.cfg 0x00           ; no stuffing, glitch filter off
+.cfg 0x0F           ; CRC width 32, no bytes skipped (the hunt aligns the frame)
+.cfg 0x20 0x83      ; polynomial 0xEDB88320, low half
+.cfg 0xFF 0xFF      ; init 0xFFFFFFFF, low half
+.cfg 0xE3 0x20      ; good-frame residue 0xDEBB20E3, low half
+.cfg 0xB8 0xED      ; polynomial, high half
+.cfg 0xFF 0xFF      ; init, high half
+.cfg 0xBB 0xDE      ; residue, high half
+.cfg 0x00
+.cfg 0xA1           ; recovery on, pin 0, phase gain shift 2, Manchester
+.cfg 0x00 0x05 0x00 ; bit period 5.0 cycles
+.cfg 0x01           ; (window: not used in Manchester mode)
+.cfg 0x00           ; no period learning (the standard allows +-0.01%)
+.cfg 0xD5           ; sync word: the start-of-frame delimiter
+.cfg 0x03           ; hunt for it; judge the CRC at the last whole byte
+
+.phys
+idle:   br_low 0 idle               ; arm on an idle (high) line
+        pipe_ctrl reset             ; clear the stream; arms the recovery
+        pipe_run 0                  ; the whole frame, until its end
+        br_noflag rx_lost status    ; check before PIPE_STATUS: with the
+        emit 5 1                    ; FIFO full it would wait forever
+status: pipe_status
+        halt
+
+.protocol
+top:    pop
+        br_bit0 15 top              ; data byte (bit 15 clear): next
+        br_bit0 0 bad               ; status word: CRC ok?
+        emit 2 1                    ; FLAG_OK
+        br_bit1 15 done
+bad:    emit 2 0
+done:   emit 3 1                    ; FLAG_DONE
+        pop

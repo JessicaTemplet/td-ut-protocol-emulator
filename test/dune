@@ -173,3 +173,13 @@
  (name test_link_health)
  (modules test_link_health)
  (libraries hardcaml tt_core))
+
+(executable
+ (name test_ethernet)
+ (modules test_ethernet)
+ (libraries hardcaml tt_core unix))
+
+(executable
+ (name test_tt_um_dual_eth)
+ (modules test_tt_um_dual_eth)
+ (libraries hardcaml tt_core))

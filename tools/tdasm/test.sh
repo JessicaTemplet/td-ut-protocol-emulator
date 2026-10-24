@@ -22,7 +22,7 @@ fields() {  # print prescale, cfg, phys, protocol of a vectors JSON, one per lin
   python3 -c 'import json,sys; v=json.load(open(sys.argv[1]))
 for k in ("prescale","cfg","phys","protocol"): print(k, v.get(k, []))' "$1"
 }
-for pair in spi_master:spi i2c_master_read:i2c usb_rx:usb usb_tx:usb_tx usb_rx_rec:usb_rec; do
+for pair in spi_master:spi i2c_master_read:i2c usb_rx:usb usb_tx:usb_tx usb_rx_rec:usb_rec eth_rx:eth; do
   src=${pair%%:*}; gold=$HC/gl_test/${pair##*:}_vectors.json
   ./tdasm "examples/$src.tds" --quiet --json "$out/$src.json" --load "$out/$src.load" || { echo "FAIL $src: assembler error"; fail=1; continue; }
   if diff <(fields "$gold") <(fields "$out/$src.json") >/dev/null; then
