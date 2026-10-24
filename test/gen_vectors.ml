@@ -4,7 +4,7 @@ open Tt_core
    test_tt_um_dual_spi.ml runs through the Cyclesim model, in a form the
    cocotb testbench (gl_test/test.py) can replay against the REAL shipped
    Verilog (RTL with the hard SRAM macro model, and the post-hardening
-   gate-level netlist). Regenerate with run_gen_vectors.sh; the committed
+   gate-level netlist). Regenerate with scripts/run_gen_vectors.sh; the committed
    JSON is what cocotb reads, so cocotb needs no OCaml toolchain.
 
    The program definitions are the same ones test_tt_um_dual_spi.ml uses

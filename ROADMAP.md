@@ -42,7 +42,7 @@ caveats are listed in `docs/design/design_rationale.txt`, Deviation 7.
 - Physical, with the bit pipe: LVS 0, Magic DRC 0, route DRC 0, antenna 0, setup WNS +7.3 ns, hold WNS +0.057 ns,
   0 max-slew, max-cap and max-fanout warnings at every corner
 - TT precheck (KLayout `ihp-sg13cmos5l` deck, pin, boundary, layer, cell-name checks): pass
-- One command re-runs everything: `./run_regression.sh`
+- One command re-runs everything: `scripts/run_regression.sh`
 
 ## Remaining work, in order
 
@@ -71,7 +71,7 @@ B items as time allows. Each step in B and C ends with the full loop: regression
 
 ## Reproducing
 
-See `README.md`: prerequisites, `./run_regression.sh`, the hardening commands, and the pinned tool versions
+See `README.md`: prerequisites, `scripts/run_regression.sh`, the hardening commands, and the pinned tool versions
 (tt-support-tools branch `ihp-sg13cmos5l`, LibreLane 3.1.0.dev3, PDK via the pinned IHP-Open-PDK commit).
 
 
@@ -365,7 +365,14 @@ pins and loader, and later in cocotb on the shipped Verilog and the hardened net
 
 - Dune quirk: `lib/tt_core.ml` shares its name with the library, which suppresses automatic submodule aliasing, so
   sibling modules need explicit `module X = X` lines in `tt_core.ml`.
-- CI and LibreLane read `src/tt_um_dual.v`; `run_main.sh` regenerates `tt_um_dual.v` and copies it there.
+- CI and LibreLane read `src/tt_um_dual.v`; `scripts/run_main.sh` regenerates it in place (`bin/main.ml`).
+- Repository reorganized (2026-10-24) so the root holds only what Tiny Tapeout and dune expect. The 25 one-line
+  `run_<suite>_test.sh` wrappers were replaced by `scripts/run_test.sh <suite>` and a suite list in
+  `scripts/run_regression.sh`; the remaining runners and the macro-abstract tools moved into `scripts/`; the Verilog
+  generator moved from `src/` to `bin/`, so `src/` is exactly what LibreLane reads. The duplicate root copy of
+  `tt_um_dual.v` is gone (the generator writes `src/tt_um_dual.v` directly, and the regression now fails if the
+  committed copy is stale), and the two fallback tops are generated into `build/` instead of being committed.
+  Script names in earlier Build log entries refer to their old root-level locations.
 - `tt_tool.py --harden` wipes `runs/wokwi/` itself; stale or forked run directories break `--overwrite` resumes.
 - PyYAML must be built against libyaml (`pip install --force-reinstall --no-binary pyyaml pyyaml`) or LibreLane
   fails with `module 'yaml' has no attribute 'CBaseLoader'`.

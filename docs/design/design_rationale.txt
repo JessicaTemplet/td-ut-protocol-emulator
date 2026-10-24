@@ -125,7 +125,7 @@ because the old 2x2 stack pointed the macros' signal pins at the die boundary.
    full-height pairs beside the macros remain; the standard-cell rails above are fed from those. Worst IR drop is 0.074%, so the
    reduced grid is not a power problem.
 **Also:** for CMOS5L the precheck runs the KLayout deck (not Magic), so Magic's DRC against the macro uses a trimmed abstract
-(`trim_maglef.py`); only the KLayout result on the real GDS gates submission.
+(`scripts/maglef/trim_maglef.py`); only the KLayout result on the real GDS gates submission.
 
 ### Deviation 5: The as-built architecture differs from the blueprint in several places
 

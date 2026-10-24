@@ -1,9 +1,9 @@
 #!/bin/bash
 # Unbounded formal proof of shadow_fifo with SymbiYosys (PDR/IC3), plus cover
 # traces to show the proof is not vacuous.
-#   OSS_CAD=/path/to/oss-cad-suite ./run_formal_fifo.sh     (default $HOME/oss-cad-suite)
+#   OSS_CAD=/path/to/oss-cad-suite scripts/run_formal_fifo.sh     (default $HOME/oss-cad-suite)
 # OSS CAD Suite: https://github.com/YosysHQ/oss-cad-suite-build/releases
-cd "$(dirname "$0")" || exit 1
+cd "$(dirname "$0")/.." || exit 1
 OSS_CAD="${OSS_CAD:-$HOME/oss-cad-suite}"
 [ -f "$OSS_CAD/environment" ] || { echo "OSS CAD Suite not found at $OSS_CAD (set OSS_CAD)"; exit 1; }
 eval "$(opam env --switch=hardcaml-env)"

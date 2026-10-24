@@ -13,7 +13,7 @@ external device on uio.
     path through the SRAM-backed netlist); check the address byte the slave
     captured, the SCL edge count, and DATA_FLAG.
 
-Microcode comes from {spi,i2c}_vectors.json (regenerate: run_gen_vectors.sh).
+Microcode comes from {spi,i2c}_vectors.json (regenerate: scripts/run_gen_vectors.sh).
 Written to run under cocotb 1.8 and 2.x.
 """
 

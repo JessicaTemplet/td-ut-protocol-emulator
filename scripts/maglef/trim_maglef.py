@@ -2,7 +2,7 @@
 """Make the SRAM's Magic DRC abstract (MAGIC_DRC_MAGLEFS) stop producing
 false Magic DRC errors at the macro's signal-pin edge.
 
-The abstract comes from `gen_maglef.tcl` (Magic `lef read` of the vendor
+The abstract comes from `gen_maglef.tcl` (same directory) (Magic `lef read` of the vendor
 LEF), which turns the LEF OBS into solid obsm2/obsm3 blocks covering the
 whole macro, starting 0-0.52um from the signal edge, plus obsm2 strips
 filling the gaps between pins. Magic's deck treats those as >10um-wide
