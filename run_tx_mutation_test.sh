@@ -11,6 +11,11 @@
 #
 # Mutants build with --profile release: a mutation that leaves a variable
 # unused would otherwise fail on the dev profile's warnings-as-errors.
+#
+# Deliberately not listed: clock_recovery.ml's shifts rounding toward
+# minus infinity instead of zero. Its effect on the closed loop (a learned
+# period 0.02 cycle low over 3000 bits) is below anything a test can
+# separate from jitter, so it would only ever "survive".
 set -u
 cd "$(dirname "$0")" || exit 1
 eval "$(opam env --switch=hardcaml-env)"
@@ -18,7 +23,7 @@ eval "$(opam env --switch=hardcaml-env)"
 WORK=$(mktemp -d "$HOME/.tx-mutation.XXXXXX")
 trap 'rm -rf "$WORK"' EXIT
 
-TESTS="test_txpipe test_dual_tx test_usb_transaction"
+TESTS="test_txpipe test_dual_tx test_usb_transaction test_clock_recovery test_usb_rx_recovery"
 
 # name # file # text to find (must occur exactly once) # replacement
 MUTATIONS=(
@@ -35,6 +40,11 @@ MUTATIONS=(
   "PROFILE does not reload the RX CRC#lib/protocol_engine.ml#; rx_crc_init = reg spec (do_profile &&: pbit 4)#; rx_crc_init = gnd"
   "CFG_WR writes nothing#lib/protocol_engine.ml#; cfg_we = advance &&: is_cfg_wr#; cfg_we = gnd"
   "timer expires on a load cycle (old bug)#lib/timer.ml#main_zero &&: (~:(inputs.load))#main_zero"
+  "recovery: phase correction sign flipped#lib/clock_recovery.ml#let v = phw +: one_cycle -: corr in#let v = phw +: one_cycle +: corr in"
+  "recovery: acceptance window ignored#lib/clock_recovery.ml#let within = (c.rec_window ==:. 0) |: (mag <=: window) in#let within = vdd in"
+  "recovery: period learning sign flipped#lib/clock_recovery.ml#let next = cur +: fstep in#let next = cur -: fstep in"
+  "recovery: strobe at the boundary, not mid-bit#lib/clock_recovery.ml#&&: (phw <: half) &&: (v_wrapped >=: half)#&&: (v >=: p)"
+  "PIPE_BIT sync does not wait for the strobe#lib/engine.ml#       |: (bit_sync &&: (~:(rec_.Clock_recovery.O.pending))))#)"
 )
 
 caught=0

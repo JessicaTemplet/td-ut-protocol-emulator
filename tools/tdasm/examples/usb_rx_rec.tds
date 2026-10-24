@@ -1,0 +1,50 @@
+; USB low-speed receive with bit-clock recovery: the sample point follows
+; the sender's clock (USB allows it to be 1.5% off), so the loop needs no
+; calibrated waits. Same program and profile as gen_vectors.ml's
+; usb_rec_program / usb_protocol_prog / usb_rec_cfg_bytes.
+;   uio pins: 0 D-, 1 D+, 2 FLAG_OK, 3 FLAG_DONE
+
+.prescale 0
+
+; Profile 0: the receive pipe (as usb_rx.tds), then the clock recovery.
+.cfg 0x1B           ; NRZI on, stuffing on, CRC on, CRC reflected, LSB first
+.cfg 0x06           ; stuff after 6 ones, glitch filter off
+.cfg 0x2F           ; CRC width 16, CRC skips 2 bytes (SYNC + PID)
+.cfg 0x01 0xA0      ; CRC16 polynomial, reflected (0xA001)
+.cfg 0xFF 0xFF      ; CRC init 0xFFFF
+.cfg 0x01 0xB0      ; good-packet residue 0xB001
+.cfg 0 0 0 0 0 0 0  ; bytes 9..15: upper CRC bits, unused
+.cfg 0x11           ; recovery on, tracking pin 0 (D-), phase gain shift 1
+.cfg 0x00 0x21 0x00 ; bit period 33.0 cycles (12.8 fixed point: 0x002100)
+.cfg 8              ; accept edges within 8 cycles of a boundary (P/4)
+.cfg 0x09           ; learn the period too, gain shift 4
+
+.phys
+idle:   br_low 0 idle               ; arm only on an idle line (D- high), so the
+                                    ; next edge is SYNC's first J->K
+        pipe_ctrl reset idle_high   ; clear the stream, idle is J; arms the recovery
+next:   pipe_sync                   ; wait for the sample strobe (mid-bit)
+        br_high 1 k_state           ; D+ high: K
+        br_high 0 j_state           ; D- high: J
+        br_low 0 eop                ; both low: SE0, end of packet
+k_state:
+        pipe_bit 0
+        br_low 7 next
+j_state:
+        pipe_bit 0
+        br_low 7 next
+eop:    pipe_status                 ; push {bytes, stuff_err, crc_ok}
+        halt
+
+.protocol
+top:    pop
+        br_bit1 15 status           ; bit 15 marks the status word
+        br_bit0 15 top              ; data byte: skip it
+status: br_bit0 0 bad               ; crc_ok
+        br_bit1 1 bad               ; stuff_err
+        br_bit0 2 bad               ; byte-aligned
+        emit 2 1                    ; FLAG_OK
+        br_bit1 15 done
+bad:    emit 2 0
+done:   emit 3 1                    ; FLAG_DONE
+        pop

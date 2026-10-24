@@ -22,7 +22,7 @@ fields() {  # print prescale, cfg, phys, protocol of a vectors JSON, one per lin
   python3 -c 'import json,sys; v=json.load(open(sys.argv[1]))
 for k in ("prescale","cfg","phys","protocol"): print(k, v.get(k, []))' "$1"
 }
-for pair in spi_master:spi i2c_master_read:i2c usb_rx:usb usb_tx:usb_tx; do
+for pair in spi_master:spi i2c_master_read:i2c usb_rx:usb usb_tx:usb_tx usb_rx_rec:usb_rec; do
   src=${pair%%:*}; gold=$HC/gl_test/${pair##*:}_vectors.json
   ./tdasm "examples/$src.tds" --quiet --json "$out/$src.json" --load "$out/$src.load" || { echo "FAIL $src: assembler error"; fail=1; continue; }
   if diff <(fields "$gold") <(fields "$out/$src.json") >/dev/null; then
@@ -47,7 +47,7 @@ expect undefined_label.tds    "undefined label \`nowhere\`"
 expect other_engine_label.tds "belongs to the other engine"
 expect wrong_engine_op.tds    "unknown uE1 (.protocol) instruction \`shift\`"
 expect missing_prescale.tds   "missing .prescale line"
-expect cfg_too_long.tds       "more than 16 config bytes for profile 0"
+expect cfg_too_long.tds       "more than 24 config bytes for profile 0"
 expect profile_range.tds      "profile 4 is out of range 0..3"
 expect bad_flag.tds           "\`first\` is not a flag of \`tx_push\`"
 expect cfg_index_range.tds    "config index 128 is out of range 0..127"

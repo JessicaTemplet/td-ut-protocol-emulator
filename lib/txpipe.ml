@@ -45,7 +45,7 @@ module I = struct
   type 'a t = {
     clk              : 'a;
     rst_n            : 'a;
-    cfg              : 'a; [@bits 128]
+    cfg              : 'a; [@bits 192]
     step             : 'a;
     ctrl_reset       : 'a;
     ctrl_crc_append  : 'a;

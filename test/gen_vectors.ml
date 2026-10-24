@@ -278,8 +278,63 @@ let usb_tx_symbols =
   usb_nrzi (usb_stuff (List.concat_map bits_of_byte_lsb (usb_tx_packet @ [ c land 0xFF; (c lsr 8) land 0xFF ])))
   @ [ 2; 2; 1 ]
 
+(* ---- USB low-speed receive with bit-clock recovery (same program and
+   profile as test_usb_rx_recovery.ml). The sender's clock is 1.5% fast
+   (USB low speed's tolerance) with +-2 cycles of edge jitter; the line is
+   given as one symbol per clock cycle so cocotb replays exactly what
+   Cyclesim saw. The jitter comes from a fixed LCG, not Random, so the
+   vector does not depend on the OCaml version. ---- *)
+let rec_period = 33.0
+
+let usb_rec_cfg_bytes =
+  let fixed = int_of_float (rec_period *. 256.0) in
+  usb_cfg_bytes @ List.init 7 (fun _ -> 0)
+  @ [ 1 lor (usb_dm lsl 1) lor (1 lsl 4); fixed land 0xFF; (fixed lsr 8) land 0xFF; (fixed lsr 16) land 0x0F; 8; 1 lor (4 lsl 1) ]
+
+let usb_rec_program =
+  Engine.
+    [ branch_cond ~pin:usb_dm ~branch_if_high:false ~target:0 (* wait for idle J *)
+    ; pipe_ctrl ~reset:true ~prev_level:true ~crc_init:false
+    ; pipe_sync
+    ; branch_cond ~pin:usb_dp ~branch_if_high:true ~target:6
+    ; branch_cond ~pin:usb_dm ~branch_if_high:true ~target:8
+    ; branch_cond ~pin:usb_dm ~branch_if_high:false ~target:10
+    ; pipe_bit ~pin:usb_dm
+    ; branch_cond ~pin:7 ~branch_if_high:false ~target:2
+    ; pipe_bit ~pin:usb_dm
+    ; branch_cond ~pin:7 ~branch_if_high:false ~target:2
+    ; pipe_status
+    ; wait_edge ~pin:7 ~falling:true ~payload:0
+    ]
+
+let usb_rec_line ~offset ~jitter symbols =
+  let seed = ref 12345 in
+  let rnd () = seed := ((!seed * 1103515245) + 12345) land 0x7FFFFFFF; float_of_int (!seed lsr 8) /. 8388608.0 in
+  let syms = Array.of_list symbols in
+  let n = Array.length syms in
+  let pt = rec_period *. (1.0 +. offset) in
+  let lead = 60.0 in
+  let b = Array.init (n + 1) (fun k ->
+    lead +. (float_of_int k *. pt) +. (if k > 0 && k < n then (rnd () *. 2.0 *. jitter) -. jitter else 0.0))
+  in
+  let total = int_of_float b.(n) + 400 in
+  let k = ref 0 in
+  List.init total (fun t ->
+    let tf = float_of_int t in
+    while !k < n && b.(!k + 1) <= tf do incr k done;
+    if tf < b.(0) || !k >= n then 1 else syms.(!k))
+
 let () =
   match Array.to_list Sys.argv with
+  | [ _; "usb_rec" ] ->
+    let good = usb_packet_symbols usb_payload in
+    let bad = List.mapi (fun i s -> if i = 40 then 1 - s else s) good in
+    Printf.printf
+      "{\n  \"prescale\": 0,\n  \"offset\": 0.015,\n  \"cfg\": %s,\n  \"pins\": {\"dm\": %d, \"dp\": %d, \"flag_ok\": %d, \"flag_done\": %d},\n  \"phys\": %s,\n  \"protocol\": %s,\n  \"good_line\": %s,\n  \"bad_line\": %s\n}\n"
+      (json_list usb_rec_cfg_bytes) usb_dm usb_dp usb_flag_ok usb_flag_done (json_list usb_rec_program)
+      (json_list usb_protocol_prog)
+      (json_list (usb_rec_line ~offset:0.015 ~jitter:2.0 good))
+      (json_list (usb_rec_line ~offset:0.015 ~jitter:2.0 bad))
   | [ _; "usb_tx" ] ->
     Printf.printf
       "{\n  \"prescale\": 0,\n  \"cell\": %d,\n  \"cfg\": %s,\n  \"pins\": {\"dm\": %d, \"dp\": %d},\n  \"phys\": %s,\n  \"protocol\": %s,\n  \"symbols\": %s\n}\n"

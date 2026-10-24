@@ -153,3 +153,18 @@
  (name test_tt_um_dual_usb_tx)
  (modules test_tt_um_dual_usb_tx)
  (libraries hardcaml tt_core))
+
+(executable
+ (name test_clock_recovery)
+ (modules test_clock_recovery)
+ (libraries hardcaml tt_core))
+
+(executable
+ (name test_usb_rx_recovery)
+ (modules test_usb_rx_recovery)
+ (libraries hardcaml tt_core))
+
+(executable
+ (name test_tt_um_dual_usb_rec)
+ (modules test_tt_um_dual_usb_rec)
+ (libraries hardcaml tt_core))

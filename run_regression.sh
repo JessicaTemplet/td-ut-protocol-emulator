@@ -28,7 +28,7 @@ run_step() {
   return 1
 }
 
-for s in run_test run_timer_test run_engine_test run_engine_branch_test run_engine_pinmux_test run_loader_test run_system_test run_tt_um_system_test run_shadow_fifo_test run_shadow_fifo_exhaustive_test run_bitpipe_test run_glitch_filter_test run_engine_push_test run_protocol_engine_test run_dual_test run_dual_loader_test run_tt_um_dual_test run_spi_master_test run_i2c_master_test run_capture_test run_dual_capture_test run_tt_um_dual_spi_test run_tt_um_dual_i2c_test run_usb_rx_test run_tt_um_dual_usb_test run_txpipe_test run_dual_tx_test run_usb_transaction_test run_tt_um_dual_usb_tx_test; do
+for s in run_test run_timer_test run_engine_test run_engine_branch_test run_engine_pinmux_test run_loader_test run_system_test run_tt_um_system_test run_shadow_fifo_test run_shadow_fifo_exhaustive_test run_bitpipe_test run_glitch_filter_test run_engine_push_test run_protocol_engine_test run_dual_test run_dual_loader_test run_tt_um_dual_test run_spi_master_test run_i2c_master_test run_capture_test run_dual_capture_test run_tt_um_dual_spi_test run_tt_um_dual_i2c_test run_usb_rx_test run_tt_um_dual_usb_test run_txpipe_test run_dual_tx_test run_usb_transaction_test run_tt_um_dual_usb_tx_test run_clock_recovery_test run_usb_rx_recovery_test run_tt_um_dual_usb_rec_test; do
   echo "=== $s ==="
   run_step "$s" 8 ./"$s".sh
 done
@@ -37,11 +37,11 @@ run_step run_tx_mutation_test 3 ./run_tx_mutation_test.sh
 echo "=== run_main (verilog gen) ==="
 run_step run_main 8 ./run_main.sh
 echo "=== gen_vectors (cocotb vectors must match the committed copy) ==="
-for v in spi i2c usb usb_tx; do cp "gl_test/${v}_vectors.json" "$LOGS/${v}_vectors.before"; done
+for v in spi i2c usb usb_tx usb_rec; do cp "gl_test/${v}_vectors.json" "$LOGS/${v}_vectors.before"; done
 # A failed generator leaves the committed files untouched, which would compare
 # equal, so its exit status is checked before the comparison.
 if run_step gen_vectors 0 ./run_gen_vectors.sh; then
-  for v in spi i2c usb usb_tx; do
+  for v in spi i2c usb usb_tx usb_rec; do
     cmp -s "gl_test/${v}_vectors.json" "$LOGS/${v}_vectors.before" \
       || { echo "FAILED: gl_test/${v}_vectors.json was stale (now regenerated; commit it)"; fail=1; }
   done

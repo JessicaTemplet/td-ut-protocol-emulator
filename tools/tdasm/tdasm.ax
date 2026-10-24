@@ -35,7 +35,7 @@
 ; Bitpipe.cfg_bytes: the bytes one profile holds.
 (:: cfgMax Int)
 (fn (cfgMax)
-  16)
+  24)
 
 ; Profile_table.n_profiles, and the config-index distance between two
 ; profiles (profile p byte k is index 32p + k).
@@ -454,6 +454,10 @@
     (if (strEq t "hi")
       128
       0)
+    (strEq m "pipe_bit")
+    (if (strEq t "sync")
+      1
+      0)
     (strEq m "profile")
     (if (strEq t "rx")
       4
@@ -488,12 +492,15 @@
       ops
     }))
 
-; A flag number for br_flag / br_noflag: 0..7, or `tx_more` (0).
+; A flag number for br_flag / br_noflag: 0..7, `tx_more` (0) or
+; `rec_overrun` (1).
 ;@axiom:effect(io)
 (:: flagOperand (-> Asm Int (Vec String) Int Int))
 (fn (flagOperand a lineNo ts i)
   (if (&& (< i (vecLen ts)) (strEq (tok ts i) "tx_more"))
     0
+    (&& (< i (vecLen ts)) (strEq (tok ts i) "rec_overrun"))
+    1
     (operand
       a
       lineNo
@@ -605,6 +612,7 @@
           (enc 2 pin 1 0)
         })
       (strEq m "pipe_bit")
+      ; optional `sync`: wait for the clock-recovery strobe first
       (let ((pin (operand
         a
         ln
@@ -612,10 +620,13 @@
         1
         "pin"
         7)))
-        {
-          (arity a ln ts 1)
-          (enc 2 pin 1 256)
-        })
+        (enc 2 pin 1 (| 256 (flagsFrom a ln ts 2))))
+      (strEq m "pipe_sync")
+      ; PIPE_BIT sync + nostep: wait for the strobe, do not sample
+      {
+        (arity a ln ts 0)
+        (enc 2 0 1 259)
+      }
       (strEq m "pipe_status")
       {
         (arity a ln ts 0)
@@ -824,7 +835,7 @@
           (set k (+ k 1))
         })
       (if (> (vecLen v) (cfgMax))
-        (report a lineNo (format "more than 16 config bytes for profile {p}"))
+        (report a lineNo (format "more than 24 config bytes for profile {p}"))
         0)
     }))
 

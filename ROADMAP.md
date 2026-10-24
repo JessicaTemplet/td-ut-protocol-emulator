@@ -19,9 +19,9 @@ bit-stuffing, CRC), a glitch filter, and a USB low-speed receive demo (items 6 a
 
 **In progress (not yet hardened):** the next features from `design_note_tx_clock_recovery.md`, built together so the
 chip is re-hardened once. Done so far: a transmit path that mirrors the bit pipe, with data decided at run time by µE1,
-and a runtime profile table (separate receive and transmit profiles, switched and rewritten while running). Next: bit-clock
-recovery, link-health reporting, 10 Mbit Ethernet receive, then a 70 MHz harden attempt (50 MHz fallback). See
-Deviation 8 and Build log section 9. The last hardened numbers below are from before this work.
+a runtime profile table (separate receive and transmit profiles, switched and rewritten while running), and bit-clock
+recovery (a second-order digital PLL the receive loop samples from). Next: link-health reporting, 10 Mbit Ethernet
+receive, then a 70 MHz harden attempt (50 MHz fallback). See Deviations 8 and 9 and Build log sections 9 and 10. The last hardened numbers below are from before this work.
 
 ## The original 10-item plan, and what happened to each
 
@@ -70,9 +70,9 @@ Deviation 8 and Build log section 9. The last hardened numbers below are from be
   simulated end to end and on the shipped Verilog; item 8 re-run with everything in.
 - Done since (not yet hardened): the transmit path, the runtime profile table, and USB transactions mixing CRC5 tokens
   and CRC16 data in one run.
-- Not built: windowed interval validation (the glitch filter's second stage), per-edge resync for a real 1.5%-tolerant
-  USB link, CAN as a full program through the pins, and the mid-bit phase-tracking counter for Manchester / 10 Mbit
-  Ethernet.
+- Done since (not yet hardened): per-edge resync for a real 1.5%-tolerant USB link (bit-clock recovery).
+- Not built: windowed interval validation (the glitch filter's second stage), CAN as a full program through the pins,
+  and Manchester decoding for 10 Mbit Ethernet.
 
 Sequencing: A first so a valid entry exists; then C (it is the novelty claim, and the gate budget has room for it);
 B items as time allows. Each step in B and C ends with the full loop: regression, harden, precheck, gate-level bench.
@@ -407,7 +407,38 @@ regression), `test_usb_transaction` (CRC5 token + CRC16 data in one run, control
 caught), and `tdasm` (`usb_tx.tds` matches the vector, `.profile` placement, five new refusals). Full regression passes,
 including every pre-existing suite unchanged. Not yet hardened.
 
-## 10. Practical notes
+## 10. Bit-clock recovery
+
+Reasons and the measured gain choice are in `docs/design/design_rationale.txt`, Deviation 9.
+
+- `lib/clock_recovery.ml`: 12.8 fixed-point phase and period, mid-bit strobe made sticky (`pending`, cleared by the
+  sync `PIPE_BIT`), acceptance window, phase gain shift, and a period estimate (the second-order term) clamped to
+  P +- P/16. `overrun` is BRANCH_COND flag 1. Profiles are now 24 bytes; bytes 16 to 21 configure the recovery.
+- µE0: `PIPE_BIT` payload bit 0 waits for the strobe, bit 1 skips the sample (`pipe_sync`).
+
+**Found while building it**
+1. **Proportional-only loses lock.** The first version, as the design note proposed, failed the jitter-and-offset
+   check: gain shift 1 at -2% rejected real edges once its phase error outgrew the window. Added the period estimate.
+2. **Choosing the period gain by sweep, not by rule.** A guessed rule (freq shift = gain shift + 2) was unstable for
+   snap correction at -1.5%; the sweep (`REC_SWEEP=1 ./run_clock_recovery_test.sh`) showed freq shift 4 is the one value
+   that holds every offset for gain shifts 0 to 3.
+3. **A rounding bias I overstated.** Arithmetic shifts round toward minus infinity; the shifts now round toward zero.
+   I first wrote that the bias was a whole cycle per packet; measured in closed loop it is 0.02 cycle, and the comment
+   says so.
+4. **Arm on an idle line.** The tt_um and cocotb benches rejected a packet the Dual-level test accepted. Replaying the
+   committed vector at Dual level passed, which ruled out an RTL/Cyclesim mismatch; the difference was the pins reading
+   0 just after `go`, so the rise to idle J was taken as the first bit boundary. Programs now wait for idle J before
+   arming, and the test shows the unwaited version failing.
+5. Harness bugs, each caught by a check failing for the wrong reason: a strobe after the last bit indexed past the end
+   of the bit table; shell escaping twice turned a scratch-directory variable into an empty string (nothing was
+   written outside the scratch area; variables now only go through script files).
+
+**Verified:** `test_clock_recovery` (unit, model boundary, control, glitch, overrun, unbiased period),
+`test_usb_rx_recovery` (USB at -2% to +2% with jitter, the timed loop as control, the arming rule),
+`test_tt_um_dual_usb_rec` and cocotb `usb_receive_with_clock_recovery` on the same committed vector, `tdasm`
+(`usb_rx_rec.tds` matches the vector), mutation check 18 of 18. Not yet hardened.
+
+## 11. Practical notes
 
 - Dune quirk: `lib/tt_core.ml` shares its name with the library, which suppresses automatic submodule aliasing, so
   sibling modules need explicit `module X = X` lines in `tt_core.ml`.

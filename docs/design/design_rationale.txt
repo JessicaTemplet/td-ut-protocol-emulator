@@ -293,3 +293,53 @@ tests now check the shortest SCL high phase, which fails on the old timer (2 cyc
 **What this does not claim (yet).** Per-edge clock recovery, link-health reporting and 10 Mbit Ethernet receive (the next items
 in the design note) are not built. USB transmit is shown for handshake and data packets; a full device (enumeration, timeouts,
 bus turnaround) is not. Not yet re-hardened: area and timing with the table and the transmit pipe are unmeasured.
+
+### Deviation 9: Bit-clock recovery, and why it became a second-order loop (2026-10-24)
+
+**What changed.** A small digital PLL (`lib/clock_recovery.ml`) now tells µE0 when to sample. Its phase counts toward
+a bit period from the receive profile (12.8 fixed point, so 33 or 46.67 cycles both work) and raises a strobe at
+mid-bit. Each edge on the tracked pin, if it lands within a window of where a boundary is expected, pulls the phase
+toward it by (error >> gain shift). `PIPE_BIT` gained a sync form that waits for the strobe, and a `pipe_sync` form
+that only waits, so a USB loop can still check for SE0 at the sample instant before stepping the pipe. Profiles grew
+to 24 bytes (bytes 16 to 21: enable, pin, gains, period, window); zero means off, so nothing earlier changes meaning.
+
+**Why it is second order.** The design note proposed a proportional correction with a gentle gain. Measured, that is
+not enough. Against a sender off by o, a proportional-only loop's phase error settles near 2^gain times the drift
+between edges, so with a gain shift of 1, a -2% sender and USB's 7-cell runs the error outgrew the acceptance window,
+real edges were rejected and lock was lost. The unit therefore also learns the period: each accepted edge moves a
+period estimate by (error >> freq shift), clamped to P +- P/16 and reset on arm. The gains were chosen from a measured
+sweep (USB-like data, +-2 cycles of jitter, offsets to +-2%, window P/4): freq shift 4 holds lock at every offset for
+phase gain shifts 0 to 3; freq shifts 0 to 2 are unstable, because an edge after a long run carries the whole run's
+drift. Beyond about +-2% it is the window, not the loop, that limits lock, and a wider window trades glitch rejection
+for range.
+
+**What was verified.**
+- Unit (`test_clock_recovery`): one strobe per bit in the middle half of the bit over 2,000+ bits at 33 and at 46.67
+  cycles a bit; every phase gain 0 to 3 at +-0.5/1.5/2% with jitter; the proportional-only loss of lock above; the
+  learned period within 0.25 cycle of an exact sender and of a 1.5%-fast one; a 3-cycle mid-bit glitch rejected by
+  the window (and pulling a sample off-centre when every edge is accepted); overrun when strobes go unconsumed.
+- **Against a model.** With snap correction, the last sample before an edge sits at (k + 1/2)(1 - o) of its cell, so
+  7-cell runs predict a limit of |o| < 7.0% once detection latency is counted; the measured boundary is +-6.75%. With
+  almost every edge rejected (a 1-cycle window) the unit is the free-running sampler it replaces: it passes at 0.3% and
+  fails at 1.5% while the tracking unit passes.
+- System (`test_usb_rx_recovery`): the USB receive loop with `pipe_sync` and no calibrated waits receives the
+  GET_DESCRIPTOR packet at every offset from -2% to +2% with +-2 cycles of jitter, and 15 random stuffing-heavy packets
+  at -1.5% and +1.5%. The calibrated timed loop of `test_usb_rx` passes only at 0%: it already fails at +-0.5%, as the
+  model predicts for a 96-bit packet (0.52%).
+- Through the real pins and on the shipped Verilog: `test_tt_um_dual_usb_rec` (Cyclesim) and cocotb's
+  `usb_receive_with_clock_recovery` replay the same committed vector, a 1.5%-fast jittery sender given one symbol per
+  clock cycle, good and corrupted.
+- Mutation check: five recovery faults (correction sign, window, period-learning sign, strobe position, `PIPE_BIT`
+  not waiting) all caught; 18 of 18 in all. One candidate is deliberately not listed: rounding the shifts toward
+  minus infinity instead of zero moves the learned period by only 0.02 cycle in closed loop, below what a test can
+  separate from jitter.
+
+**A program rule the pin-level benches found.** Armed, the unit takes the next edge as a bit boundary. Armed while the
+line was low (SE0 at power-up; the benches' pins read 0 for a few cycles after `go`), the rise to idle J became the
+first boundary and idle cells were sampled as data. The Dual-level test never drove the line low first, so it could not
+see it. A receive program must wait for the idle level before arming (`br_low 0 idle` ahead of the reset);
+`test_usb_rx_recovery` now shows both: the waiting loop receives the packet, the same loop without the wait does not.
+
+**Not claimed.** Link-health reporting (timing margin and CRC syndrome in the status word), Manchester decoding and
+10 Mbit Ethernet are the next items. Not re-hardened yet: the recovery and the wider profiles add flops and a 21-bit
+datapath whose timing is unmeasured.

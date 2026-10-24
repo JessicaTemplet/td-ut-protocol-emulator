@@ -327,5 +327,6 @@ module Dual = Dual
 module Dual_loader = Dual_loader
 module Bitpipe = Bitpipe
 module Txpipe = Txpipe
+module Clock_recovery = Clock_recovery
 module Profile_table = Profile_table
 module Glitch_filter = Glitch_filter

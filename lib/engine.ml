@@ -103,6 +103,12 @@ open Signal
                                through the loader's cfg_sel path, so one
                                instruction per bit replaces the ~10 a
                                software bit-banger needs for USB / CAN.
+                               payload[0] = sync: first wait for the bit-
+                               clock recovery's sample strobe
+                               (clock_recovery.ml), so the sample point
+                               follows the sender's clock instead of a
+                               timer. payload[1] = nostep: only that wait,
+                               no sample (`pipe_sync`).
                  2 PIPE_STATUS push a status word {1, bytes, 5'b0, aligned,
                                stuff_err, crc_ok} to the FIFO (bit 15 marks
                                it so the protocol engine can tell it from
@@ -143,7 +149,9 @@ open Signal
                payload[9] = 1 (above the 9-bit target, 0 in every
                earlier program) branches on an internal FLAG instead of a
                pin, pin_sel choosing which: 0 = TX more (the transmit
-               pipe still has data, CRC or a stuff bit to send).)
+               pipe still has data, CRC or a stuff bit to send),
+               1 = clock-recovery overrun (a sample strobe passed while
+               the previous one was still unconsumed).)
 
    Instruction memory is a real read/write RAM, sized and addressed to
    match Loader.addr_width -- this is what makes the core actually
@@ -244,8 +252,8 @@ module I = struct
     write_addr   : 'a; [@bits 9]
     write_data   : 'a; [@bits 16]
     push_stall   : 'a;
-    rx_cfg       : 'a; [@bits 128]
-    tx_cfg       : 'a; [@bits 128]
+    rx_cfg       : 'a; [@bits 192]
+    tx_cfg       : 'a; [@bits 192]
     tx_fifo_data : 'a; [@bits 16]
     tx_fifo_empty : 'a;
     ext_rx_crc_init : 'a;
@@ -308,6 +316,14 @@ let pipe_sub sub ~pin ~ops = encode ~opcode:2 ~pin ~mode:1 ~payload:((sub lsl 8)
    CRC and byte assembly. A completed byte is pushed to the FIFO (stalling
    while the FIFO is full). *)
 let pipe_bit ~pin = pipe_sub 1 ~pin ~ops:0
+
+(* PIPE_BIT sync: wait for the clock-recovery sample strobe, then sample. *)
+let pipe_bit_sync ~pin = pipe_sub 1 ~pin ~ops:1
+
+(* PIPE_BIT sync + nostep: wait for the clock-recovery sample strobe, then
+   continue without stepping the pipe (the program inspects the line, e.g.
+   for USB's SE0, and steps with a plain PIPE_BIT right after). *)
+let pipe_sync = pipe_sub 1 ~pin:0 ~ops:3
 
 (* PIPE_STATUS: push one 16-bit status record {1, bytes[6:0], 5'b0,
    aligned, stuff_err, crc_ok} to the FIFO. Bit 15 marks it as a status
@@ -506,14 +522,30 @@ let create_generic ~build_instr (inputs : Signal.t I.t) =
     mux2 selecting gnd s_now |: reg spec (s_now &&: selecting)
   in
   let prev_level = mux2 (reg spec (ctrl &&: selecting)) (reg spec (pbit 1)) (pbit 1) in
+  (* PIPE_BIT payload[0] = sync: wait for the clock-recovery sample strobe
+     first; payload[1] = nostep: only wait, do not step the pipe (a USB loop
+     checks for SE0 between the strobe and the step) *)
+  let rx_reset = now_or_later (pbit 0) in
+  let bit_sync = is_pipe_bit &&: pbit 0 in
+  let bit_step = is_pipe_bit &&: (~:(pbit 1)) in
+  let rec_ =
+    Clock_recovery.create
+      { Clock_recovery.I.clk = inputs.clk
+      ; rst_n = inputs.rst_n
+      ; cfg = inputs.rx_cfg
+      ; pins_in = inputs.pins_in
+      ; arm = rx_reset
+      ; consume = advance &&: bit_sync
+      }
+  in
   let bp =
     Bitpipe.create
       { Bitpipe.I.clk = inputs.clk
       ; rst_n = inputs.rst_n
       ; cfg = inputs.rx_cfg
-      ; step = advance &&: is_pipe_bit
+      ; step = advance &&: bit_step
       ; line = rx_pin
-      ; ctrl_reset = now_or_later (pbit 0)
+      ; ctrl_reset = rx_reset
       ; ctrl_crc_init = now_or_later (pbit 2) |: inputs.ext_rx_crc_init
       ; prev_init = prev_level
       }
@@ -534,15 +566,17 @@ let create_generic ~build_instr (inputs : Signal.t I.t) =
   let would_push =
     (is_normal_shift &&: payload_bit0)
     ||: is_capture ||: is_pipe_status
-    ||: (is_pipe_bit &&: bp.Bitpipe.O.would_push)
+    ||: (bit_step &&: bp.Bitpipe.O.would_push)
   in
   let shift_advance_ok =
-    ~:((would_push &&: inputs.push_stall) |: (is_emit_tx &&: tx.Txpipe.O.would_stall))
+    ~:((would_push &&: inputs.push_stall)
+       |: (is_emit_tx &&: tx.Txpipe.O.would_stall)
+       |: (bit_sync &&: (~:(rec_.Clock_recovery.O.pending))))
   in
   advance <== (inputs.run &&: mux2 is_wait wait_condition shift_advance_ok);
 
   (* internal flags for BRANCH_COND's flag form, selected by pin_sel *)
-  let flags = [ tx.Txpipe.O.more ] in
+  let flags = [ tx.Txpipe.O.more; rec_.Clock_recovery.O.overrun ] in
   let flag = mux pin_sel (flags @ List.init (8 - List.length flags) (fun _ -> gnd)) in
   let cond = mux2 is_flag_branch flag rx_pin in
   branch_taken <== (is_branch &&: mux2 mode cond (~:cond));

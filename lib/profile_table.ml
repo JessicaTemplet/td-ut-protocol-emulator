@@ -63,8 +63,8 @@ end
 
 module O = struct
   type 'a t = {
-    rx_cfg   : 'a; [@bits 128]
-    tx_cfg   : 'a; [@bits 128]
+    rx_cfg   : 'a; [@bits 192]
+    tx_cfg   : 'a; [@bits 192]
     rx_id    : 'a; [@bits 2]
     tx_id    : 'a; [@bits 2]
     glitch_n : 'a; [@bits 4]

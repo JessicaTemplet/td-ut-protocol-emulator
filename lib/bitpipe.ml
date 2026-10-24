@@ -33,7 +33,7 @@ open Signal
            the stuffed bit starts the next run), CRC15 poly 0x4599,
            not reflected, init 0, residue 0, MSB-first.
 
-   Profile layout, 16 bytes (byte k in bits [8k+7:8k]):
+   Profile layout, 24 bytes (byte k in bits [8k+7:8k]):
      0: flags  [0] nrzi_en  [1] stuff_en  [2] stuff_count_both
                [3] crc_en   [4] crc_reflected  [5] msb_first
                [6] CRC width - 1, bit 4 (widths 17..32)
@@ -55,9 +55,23 @@ open Signal
      11,12: CRC init bits 31..16
      13,14: CRC residue bits 31..16
      15:    reserved (0)
+     Bit-clock recovery (clock_recovery.ml; receive only):
+     16: [0] rec_en  [3:1] the pin it tracks  [6:4] gain shift: an edge
+               moves the phase by (error >> shift), 0 = snap to the edge
+               [7] reserved (0)
+     17:    bit period, fractional part (1/256 cycle)
+     18,19: bit period, integer cycles (12 bits; [15:12] reserved, 0)
+     20:    acceptance window in whole cycles: an edge further than this
+            from where a bit boundary is expected is ignored. 0 = accept
+            every edge.
+     21: [0] freq_en: also learn the sender's bit period  [3:1] its gain
+            shift: an edge moves the period estimate by (error >> shift)
+            [7:4] reserved (0)
+     22..23: reserved (0)
    Bytes 0..8 are the original 9-byte configuration, unchanged, so every
    configuration written before the profile table still means the same
-   thing (bytes 9..15 zero = a CRC of at most 16 bits).
+   thing (bytes 9..15 zero = a CRC of at most 16 bits; byte 16 zero = no
+   clock recovery).
    All-zero profile = every stage off: the unit degenerates to a plain
    byte assembler (and the transmit pipe to a plain LSB-first shifter).
 
@@ -72,7 +86,7 @@ open Signal
    can use it to gate `step` without a combinational loop.
    ============================================================ *)
 
-let cfg_bytes = 16
+let cfg_bytes = 24
 let cfg_bits = 8 * cfg_bytes
 let crc_bits = 32
 
@@ -91,6 +105,13 @@ type cfg =
   ; poly : Signal.t (* 32 bits *)
   ; init : Signal.t
   ; residue : Signal.t
+  ; rec_en : Signal.t
+  ; rec_pin : Signal.t (* 3 bits *)
+  ; rec_gain : Signal.t (* 3 bits *)
+  ; rec_period : Signal.t (* 20 bits, 12.8 fixed point *)
+  ; rec_window : Signal.t (* 8 bits, whole cycles *)
+  ; rec_freq_en : Signal.t
+  ; rec_fshift : Signal.t (* 3 bits *)
   }
 
 let decode_cfg cfg =
@@ -111,6 +132,13 @@ let decode_cfg cfg =
   ; poly = concat_msb [ word16 9; word16 3 ]
   ; init = concat_msb [ word16 11; word16 5 ]
   ; residue = concat_msb [ word16 13; word16 7 ]
+  ; rec_en = bit (byte 16) 0
+  ; rec_pin = select (byte 16) 3 1
+  ; rec_gain = select (byte 16) 6 4
+  ; rec_period = concat_msb [ select (byte 19) 3 0; byte 18; byte 17 ]
+  ; rec_window = byte 20
+  ; rec_freq_en = bit (byte 21) 0
+  ; rec_fshift = select (byte 21) 3 1
   }
 
 (* The run-length rule both directions share. A stuff bit is due when the
@@ -146,7 +174,7 @@ module I = struct
   type 'a t = {
     clk           : 'a;
     rst_n         : 'a;
-    cfg           : 'a; [@bits 128]
+    cfg           : 'a; [@bits 192]
     step          : 'a;
     line          : 'a;
     ctrl_reset    : 'a;

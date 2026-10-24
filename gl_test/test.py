@@ -171,6 +171,36 @@ async def usb_low_speed_receive_corrupted_packet(dut):
     assert ok == (True, False), f"corrupted USB packet was not rejected: {ok}"
 
 
+async def usb_recovered(dut, line):
+    """USB receive with bit-clock recovery: the sender's clock is 1.5% fast
+    with edge jitter; `line` is one symbol per clock cycle (1 = J, 0 = K,
+    2 = SE0). Returns (flag_ok, flag_done)."""
+    vec = vectors("usb_rec_vectors.json")
+    pin = vec["pins"]
+    await load_and_go(dut, vec)
+    for cyc, s in enumerate(line):
+        dm = 1 if s == 1 else 0
+        dp = 1 if s == 0 else 0
+        dut.uio_in.value = (dm << pin["dm"]) | (dp << pin["dp"])
+        await RisingEdge(dut.clk)
+        await Timer(1, "ns")
+        resolved(dut, cyc, len(line))
+    out, oe = int(dut.uio_out.value), int(dut.uio_oe.value)
+    flag = lambda p: ((oe >> p) & 1 == 1, (out >> p) & 1 == 1)
+    return flag(pin["flag_ok"]), flag(pin["flag_done"])
+
+
+@cocotb.test()
+async def usb_receive_with_clock_recovery(dut):
+    vec = vectors("usb_rec_vectors.json")
+    ok, done = await usb_recovered(dut, vec["good_line"])
+    assert done == (True, True), f"flag_done not driven high: {done}"
+    assert ok == (True, True), f"packet from a 1.5%-fast sender not accepted: {ok}"
+    ok, done = await usb_recovered(dut, vec["bad_line"])
+    assert done == (True, True), f"flag_done not driven high (corrupted): {done}"
+    assert ok == (True, False), f"corrupted packet was not rejected: {ok}"
+
+
 @cocotb.test()
 async def usb_low_speed_transmit(dut):
     """USB low-speed DATA0 transmit: µE1 pushes the packet at run time, µE0's
