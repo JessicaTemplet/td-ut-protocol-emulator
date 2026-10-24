@@ -61,8 +61,8 @@ to 11 and Build log sections 9 to 12. The last hardened numbers below are from b
 3. Submit through the competition's process.
 
 ### B. Hardening the design (optional, each invalidates the current layout and needs a full re-verify)
-- **Hardware halt / program-overrun guard.** Instruction SRAM is not cleared, so a program that runs off its last word
-  executes arbitrary bits. Today this is a documented software rule (end with a halt).
+- ~~**Hardware halt / program-overrun guard.**~~ Done (not yet hardened): each engine stops at the first address past
+  its loaded program. See Build log section 13.
 - ~~**Runtime-data output.**~~ Done (not yet hardened): `TX_PUSH`/`TX_ECHO` from µE1 and `EMIT_TX` on µE0, through the
   transmit pipe. See Build log section 9.
 - **System-level formal proof** that the two engines cannot deadlock (currently directed simulation).
@@ -473,7 +473,24 @@ Reasons, the six measured steps that shaped the decoder, and the tolerance table
 **Measured:** 50 MHz, 30/30 frames at +-0.01% with +-0.5 cycle (10 ns) of jitter; 70 MHz, 30/30 with +-0.75 cycle
 (10.7 ns). Not yet hardened.
 
-## 13. Practical notes
+## 13. Input synchronizer, halt guard, loopback self-test
+
+Reasons are in `docs/design/design_rationale.txt`, Deviation 12. Found in a whole-design review before the 70 MHz
+harden: the run-time pins reached logic unsynchronized (STA's worst fast-corner setup path started at `uio_in[3]`).
+
+- `dual.ml`: 2-FF synchronizer on `pins_in` (`Dual.sync_latency` = 2). Three benches that drive pins on exact cycles
+  (`test_dual`, `test_dual_capture`, `test_usb_rx_recovery`) failed with it, each because its stimulus was now two
+  cycles early relative to the engine; they start the stream `sync_latency` cycles before `run`, so each engine sees
+  exactly the sequence it saw before. Every other suite and the cocotb bench passed unchanged.
+- `halt_guard.ml`, used by both engines; `halted` outputs on both engines and on `Dual`. `test_halt_guard`.
+- `profile_table.ml`: loopback mask at index 24 (`loopback_index`). `tt_core.ml`: masked pins read the chip's own output
+  and their pads are not driven. The self-test program is in `test/gen_vectors.ml` (`st_*`), `gl_test/selftest_vectors.json`,
+  `test_tt_um_dual_selftest` and cocotb `loopback_self_test`.
+
+**Verified:** all suites, the new ones included; cocotb 8/8 on the regenerated Verilog; the mutation check with six new
+faults, each caught. Not yet hardened.
+
+## 14. Practical notes
 
 - Dune quirk: `lib/tt_core.ml` shares its name with the library, which suppresses automatic submodule aliasing, so
   sibling modules need explicit `module X = X` lines in `tt_core.ml`.

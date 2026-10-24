@@ -16,8 +16,12 @@ external device on uio.
   * USB low speed: receive a packet through the bit pipe (good and corrupted),
     and transmit one through the transmit pipe (data decided at run time by
     uE1), compared cell by cell with the reference encoder's line.
+  * Loopback self-test: uio pin 0 looped back inside the chip; a USB packet
+    goes out through the transmit pipe and back in through the receive pipe,
+    and uE1 raises PASS. The pad is toggled by the bench and must never be
+    driven.
 
-Microcode comes from {spi,i2c,usb,usb_tx}_vectors.json (regenerate:
+Microcode comes from {spi,i2c,usb,usb_tx,usb_rec,eth,selftest}_vectors.json (regenerate:
 scripts/run_gen_vectors.sh).
 Written to run under cocotb 1.8 and 2.x.
 """
@@ -268,6 +272,30 @@ async def usb_low_speed_transmit(dut):
         if k < len(symbols) - 3:
             assert d_p == 1 - d_m, f"cell {k}: D+ is not the complement of D-"
     assert got == symbols, f"line symbols differ from the reference encoder:\n{got}\n{symbols}"
+
+
+@cocotb.test()
+async def loopback_self_test(dut):
+    """On-chip loopback self-test: the 25th configuration byte loops uio pin 0
+    back inside the chip and stops driving its pad. µE1 pushes a USB DATA0
+    packet, µE0 sends it through the transmit pipe and receives it back
+    through the receive pipe, µE1 checks the status word and raises PASS.
+    The bench toggles pin 0's pad the whole time to show the pad is out of
+    the loop, and checks the pad is never driven."""
+    vec = vectors("selftest_vectors.json")
+    pin = vec["pins"]
+    await load_and_go(dut, vec)
+    total = 3000
+    for cyc in range(total):
+        dut.uio_in.value = ((cyc * 7 // 3) & 1) << pin["line"]
+        await RisingEdge(dut.clk)
+        await Timer(1, "ns")
+        resolved(dut, cyc, total)
+        assert not (int(dut.uio_oe.value) >> pin["line"]) & 1, f"looped pin's pad driven at cycle {cyc}"
+    o, e = int(dut.uio_out.value), int(dut.uio_oe.value)
+    for name in ("done", "ok"):
+        k = pin[name]
+        assert (e >> k) & 1 and (o >> k) & 1, f"self-test {name.upper()} flag not raised"
 
 
 @cocotb.test()

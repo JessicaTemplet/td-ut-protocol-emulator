@@ -409,6 +409,62 @@ let eth_line ~jitter bytes =
     let tf = float_of_int t in
     if tf < h.(0) then 1 else (while !m < 2 * n && h.(!m + 1) <= tf do incr m done; level !m))
 
+(* ---- Loopback self-test (same program and configuration as
+   test_tt_um_dual_selftest.ml). The configuration's 25th byte is the
+   loopback mask (profile_table.ml): uio pin 0 reads the chip's own output
+   and its pad is never driven. µE1 pushes a USB DATA0 packet; µE0 sends
+   each line bit through the transmit pipe (NRZI, stuffing, CRC16
+   appended) and samples it back through the receive pipe a few cycles
+   later; µE1 checks the status word (CRC good, no stuffing error, byte
+   aligned, 6 bytes) and raises the PASS flag. Nothing needs to be
+   attached to the chip. ---- *)
+let st_line = 0
+let st_flag_ok = 4
+let st_flag_done = 5
+let st_wait = 4 (* emit -> sample: output register + 2-FF synchronizer + margin *)
+let st_cfg_bytes = usb_tx_cfg_bytes @ List.init (Profile_table.loopback_index - 9) (fun _ -> 0) @ [ 1 lsl st_line ]
+let st_packet = [ 0x80; 0xC3; 0xFF; 0xFF ] (* SYNC, DATA0, two all-ones bytes: stuffing *)
+
+let st_program =
+  let wait n = Engine.wait_edge ~pin:7 ~falling:true ~payload:n in
+  Engine.
+    [ pipe_ctrl_ext ~reset:true ~prev_level:true ~tx_reset:true () (* both pipes, idle J *)
+    ; emit_state ~pin:st_line ~level:true (* J *)
+    ; wait 8
+    ; emit_tx ~pin:st_line () (* 3: data loop *)
+    ; wait st_wait
+    ; pipe_bit ~pin:st_line
+    ; branch_flag ~flag:flag_tx_more ~branch_if_set:true ~target:3
+    ; pipe_ctrl_ext ~tx_crc:true ()
+    ; emit_tx ~pin:st_line () (* 8: CRC loop *)
+    ; wait st_wait
+    ; pipe_bit ~pin:st_line
+    ; branch_flag ~flag:flag_tx_more ~branch_if_set:true ~target:8
+    ; pipe_status
+    ; release_pin ~pin:st_line
+    ; wait_edge ~pin:7 ~falling:true ~payload:0 (* halt *)
+    ]
+
+let st_protocol_prog =
+  let fail = 15 in
+  let n = List.length st_packet in
+  List.mapi (fun k b -> Protocol_engine.tx_push ~last:(k = n - 1) b) st_packet
+  @ Protocol_engine.
+      [ fifo_pop_instr (* 4 *)
+      ; branch_word ~bit:15 ~branch_if_one:true ~target:7 (* status word *)
+      ; branch_word ~bit:15 ~branch_if_one:false ~target:4 (* data byte: next *)
+      ; branch_word ~bit:0 ~branch_if_one:false ~target:fail (* crc_ok *)
+      ; branch_word ~bit:1 ~branch_if_one:true ~target:fail (* stuff_err *)
+      ; branch_word ~bit:2 ~branch_if_one:false ~target:fail (* aligned *)
+      ; branch_word ~bit:8 ~branch_if_one:true ~target:fail (* bytes = 6 = 0b0000110 *)
+      ; branch_word ~bit:9 ~branch_if_one:false ~target:fail
+      ; branch_word ~bit:10 ~branch_if_one:false ~target:fail
+      ; branch_word ~bit:11 ~branch_if_one:true ~target:fail
+      ; emit_state ~pin:st_flag_ok ~level:true
+      ; emit_state ~pin:st_flag_done ~level:true (* 15 *)
+      ; fifo_pop_instr (* halt *)
+      ]
+
 let () =
   match Array.to_list Sys.argv with
   | [ _; "eth" ] ->
@@ -428,6 +484,18 @@ let () =
       (json_list (usb_rec_line ~offset:0.015 ~jitter:2.0 bad))
       (* exact clock, heavy jitter: the CRC still passes, the margin warns *)
       (json_list (usb_rec_line ~offset:0.0 ~jitter:7.0 good))
+  | [ _; "selftest" ] ->
+    Printf.printf
+      "{
+  \"prescale\": 0,
+  \"cfg\": %s,
+  \"pins\": {\"line\": %d, \"ok\": %d, \"done\": %d},
+  \"phys\": %s,
+  \"protocol\": %s
+}
+"
+      (json_list st_cfg_bytes) st_line st_flag_ok st_flag_done (json_list st_program)
+      (json_list st_protocol_prog)
   | [ _; "usb_tx" ] ->
     Printf.printf
       "{\n  \"prescale\": 0,\n  \"cell\": %d,\n  \"cfg\": %s,\n  \"pins\": {\"dm\": %d, \"dp\": %d},\n  \"phys\": %s,\n  \"protocol\": %s,\n  \"symbols\": %s\n}\n"

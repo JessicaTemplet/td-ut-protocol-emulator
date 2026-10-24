@@ -270,11 +270,12 @@ let tt_um_dual_generic ~dual_create (inputs : Signal.t I.t) =
       ; cfg_sel = select inputs.uio_in 4 4
       }
   in
+  let looped_pins = wire 8 in
   let dual_out =
     dual_create
       { Dual.I.clk = inputs.clk
       ; rst_n = inputs.rst_n
-      ; pins_in = inputs.uio_in
+      ; pins_in = looped_pins
       ; prescale = loader_out.Dual_loader.O.prescale
       ; run = loader_out.Dual_loader.O.run
       ; protocol_run = loader_out.Dual_loader.O.run
@@ -299,9 +300,18 @@ let tt_um_dual_generic ~dual_create (inputs : Signal.t I.t) =
   let bits = List.init 8 (fun i -> combine_bit (7 - i)) in
   let combined_oe = concat_msb (List.map fst bits) in
   let combined_out = concat_msb (List.map snd bits) in
+  (* Internal loopback (profile_table.ml's loopback mask): on a masked pin
+     the engines read the chip's own output instead of the pad, and the pad
+     is not driven, so a self-test needs nothing attached and cannot fight
+     whatever is. A released (oe=0) masked pin reads high, like a pulled-up
+     open-drain bus. The looped level still goes through Dual's input
+     synchronizer, so it arrives with the same latency as an external pin. *)
+  let mask = dual_out.Dual.O.loopback in
+  let own_level = combined_out |: (~:combined_oe) in
+  looped_pins <== ((inputs.uio_in &: (~:mask)) |: (own_level &: mask));
   { O.uo_out = mux2 loader_out.Dual_loader.O.run combined_out loader_out.Dual_loader.O.checksum
   ; uio_out = mux2 loader_out.Dual_loader.O.run combined_out (zero 8)
-  ; uio_oe = mux2 loader_out.Dual_loader.O.run combined_oe (zero 8)
+  ; uio_oe = mux2 loader_out.Dual_loader.O.run (combined_oe &: (~:mask)) (zero 8)
   }
 
 let tt_um_dual (inputs : Signal.t I.t) =

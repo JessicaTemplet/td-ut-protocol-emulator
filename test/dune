@@ -188,3 +188,8 @@
  (name test_halt_guard)
  (modules test_halt_guard)
  (libraries hardcaml tt_core))
+
+(executable
+ (name test_tt_um_dual_selftest)
+ (modules test_tt_um_dual_selftest)
+ (libraries hardcaml tt_core))

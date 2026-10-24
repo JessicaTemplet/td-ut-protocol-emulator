@@ -33,6 +33,13 @@ open Signal
    The glitch filter is a pin-level setting shared by both engines, so
    it always comes from profile 0 (byte 1 bits [7:4]), whichever profile
    is active.
+
+   One more pin-level byte sits right after profile 0, at index 24
+   (`loopback_index`): the loopback mask. A set bit k routes the chip's own
+   output for uio pin k back into its input and stops driving the pad
+   (tt_core.ml), so a program can transmit and receive on the same pin
+   with nothing attached. Written like any table byte: by the loader (the
+   25th configuration byte) or by µE1's CFG_WR at run time. Resets to 0.
    ============================================================ *)
 
 let n_profiles = 4
@@ -41,6 +48,7 @@ let stride = 32
 let index_width = 7
 let profile_bytes = Bitpipe.cfg_bytes
 let profile_bits = 8 * profile_bytes
+let loopback_index = profile_bytes
 
 module I = struct
   type 'a t = {
@@ -68,6 +76,7 @@ module O = struct
     rx_id    : 'a; [@bits 2]
     tx_id    : 'a; [@bits 2]
     glitch_n : 'a; [@bits 4]
+    loopback : 'a; [@bits 8]
   } [@@deriving sexp_of, hardcaml]
 end
 
@@ -92,9 +101,14 @@ let create (i : Signal.t I.t) =
   let rx_id = pointer ~e0:i.e0_sel_rx ~e1:i.e1_sel_rx in
   let tx_id = pointer ~e0:i.e0_sel_tx ~e1:i.e1_sel_tx in
   let profile0 = List.hd profiles in
+  let loopback =
+    reg_fb ~enable:(one 1) spec ~width:8 ~f:(fun cur ->
+      mux2 (we &&: (addr ==:. loopback_index)) data cur)
+  in
   { O.rx_cfg = mux rx_id profiles
   ; tx_cfg = mux tx_id profiles
   ; rx_id
   ; tx_id
   ; glitch_n = select profile0 15 12
+  ; loopback
   }

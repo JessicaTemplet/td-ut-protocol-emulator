@@ -118,6 +118,7 @@ module O = struct
     tx_fifo_empty      : 'a;
     rx_profile         : 'a; [@bits 2]
     tx_profile         : 'a; [@bits 2]
+    loopback           : 'a; [@bits 8]
   } [@@deriving sexp_of, hardcaml]
 end
 
@@ -272,6 +273,7 @@ let create_generic ~engine_create ~protocol_create (inputs : Signal.t I.t) =
   ; tx_fifo_empty = tx_fifo.Shadow_fifo.O.empty
   ; rx_profile = table.Profile_table.O.rx_id
   ; tx_profile = table.Profile_table.O.tx_id
+  ; loopback = table.Profile_table.O.loopback
   }
 
 let create (inputs : Signal.t I.t) =

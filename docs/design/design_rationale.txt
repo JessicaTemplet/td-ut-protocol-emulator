@@ -431,3 +431,48 @@ lock with 3 of 7 preamble bytes; a flipped bit and a truncated frame rejected; d
 and failed without; the lost-byte flag. Through the real pins in Cyclesim (`test_tt_um_dual_eth`) and on the shipped
 Verilog in cocotb (`ethernet_receive`), on one committed vector. Mutation check: seven Manchester, hunt, octet-CRC and
 run faults added, each caught (29 of 29 in all). Not re-hardened yet; the 70 MHz attempt comes with the harden.
+
+### Deviation 12: Input synchronizer, halt guard and an on-chip loopback self-test (2026-10-24)
+
+**What changed.** Three small additions, made together because each changes the RTL and all of them land in the same
+harden.
+
+- **Input synchronizer.** Every pin now passes a 2-FF synchronizer (`dual.ml`) before the glitch filter. Until now the
+  raw pin went straight into logic: one sampled level fed, in the same cycle, the edge detect, the branch decision that
+  picks the next pc, the shift register and the bit pipe. The pins are asynchronous to the clock, so an edge close to a
+  clock edge could be seen by some of those flops and not others; the worst case is a branch whose pc bits disagree
+  about taken or not taken, sending the engine to an address that is neither. Signoff STA showed the same thing from
+  the other side, as a direct `uio_in` to flop path. The loader's `strobe`/`go` already had this; the run-time pins did
+  not. Cost: 16 flops and 2 cycles of input latency, the same for every pin, so no program's timing relations change.
+  Three benches drove pins on exact cycles and now start their stimulus `Dual.sync_latency` cycles early.
+- **Halt guard** (`halt_guard.ml`). Instruction SRAM is not cleared, so a program that falls through its last word, or
+  branches to an address it never loaded, would execute power-up garbage. That was a documented software rule (end
+  every program with a halt). Each engine now tracks the highest address written plus one, from its own write port, and
+  gates its run once pc reaches it: the word there is fetched but never executed and the pins keep their levels. A
+  program that ends in an explicit halt never reaches it. No opcode, no loader change.
+- **Loopback self-test.** A new pin-level configuration byte, index 24 right after profile 0, is a loopback mask
+  (`profile_table.ml`). On a masked uio pin the engines read the chip's own output instead of the pad, and the pad is
+  not driven (`tt_core.ml`); a released masked pin reads high, like a pulled-up bus. The looped level goes through the
+  same synchronizer as a real pin. With the transmit and receive pipes reading the same profile, one µE0 loop can send a
+  packet bit by bit and sample each bit back, and µE1 can judge the result from the status word. That is a chip that
+  checks its own transmit pipe, receive pipe, both FIFOs and µE1 at bring-up with nothing attached. The mask is written
+  like any table byte: by the loader (the 25th configuration byte) or by µE1's `CFG_WR`.
+
+**Why one engine sends and receives.** Only µE0 has bit timing, so "µE1 transmits, µE0 receives" is not possible in this
+architecture. µE0 interleaves instead: `EMIT_TX`, a short wait (output register plus synchronizer), `PIPE_BIT` on the
+same pin. This works because the transmit pipe keeps its own NRZI, stuffing and CRC state (`txpipe.ml`), separate from
+the receive pipe's. A shared CRC register, as first proposed, would have made this test impossible.
+
+**What was verified.**
+- `test_halt_guard`: µE1 falling off a one-word program stops with the FIFO still holding the bytes it never popped (an
+  unguarded µE1 drains it, because Cyclesim's zero words decode as `FIFO_POP`); µE0 halts at an unloaded branch target
+  and after a fall-through, pins held; programs ending in an explicit halt never trip it.
+- `test_tt_um_dual_selftest`, through the real pins with everything loaded over them: PASS with nothing attached and the
+  looped pad never driven; still PASS with the bench toggling that pad every cycle (the pad is out of the loop);
+  DONE without PASS with loopback off and the pad held idle (the test notices nothing came back), and that pad driven.
+  The same program runs on the shipped Verilog in cocotb (`loopback_self_test`).
+- Every existing suite passes with the synchronizer; the three timing-exact benches were realigned, not loosened.
+- Mutation check: the synchronizer removed, the guard never tripping, the guard tracking only the first write, the
+  loopback mask ignored, a masked pad still driven, and the mask never written are each caught.
+- Not done: `tdasm` cannot yet write the loopback byte (it would need a directive that places it at index 24); hosts
+  send the 25 bytes directly, as the vectors do.

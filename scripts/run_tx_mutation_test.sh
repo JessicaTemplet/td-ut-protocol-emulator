@@ -1,6 +1,6 @@
 #!/bin/bash
 # Mutation check for the transmit path, the profile table, the input
-# synchronizer and the halt guard. Each entry
+# synchronizer, the halt guard and the loopback self-test. Each entry
 # below injects one deliberate hardware fault into a scratch copy of the
 # sources; the transmit and profile tests (test_txpipe, test_dual_tx,
 # test_usb_transaction) must FAIL on every one. A mutation that survives is
@@ -24,7 +24,7 @@ eval "$(opam env --switch=hardcaml-env)"
 WORK=$(mktemp -d "$HOME/.tx-mutation.XXXXXX")
 trap 'rm -rf "$WORK"' EXIT
 
-TESTS="test_txpipe test_dual_tx test_usb_transaction test_clock_recovery test_usb_rx_recovery test_link_health test_ethernet test_dual test_halt_guard"
+TESTS="test_txpipe test_dual_tx test_usb_transaction test_clock_recovery test_usb_rx_recovery test_link_health test_ethernet test_dual test_halt_guard test_tt_um_dual_selftest"
 
 # name # file # text to find (must occur exactly once) # replacement
 MUTATIONS=(
@@ -60,6 +60,9 @@ MUTATIONS=(
   "input synchronizer removed#lib/dual.ml#let pins_sync = reg sync_spec (reg sync_spec inputs.pins_in) in#let pins_sync = inputs.pins_in in"
   "halt guard never trips#lib/halt_guard.ml#  (loaded <>:. 0) &&: (uresize pc width >=: loaded)#  gnd"
   "halt guard ignores branches past the program (tracks the first write only)#lib/halt_guard.ml#mux2 (write_enable &&: (addr >=: cur)) (addr +:. 1) cur#mux2 (write_enable &&: (cur ==:. 0)) (addr +:. 1) cur"
+  "loopback mask ignored (engines read the pad)#lib/tt_core.ml#  looped_pins <== ((inputs.uio_in &: (~:mask)) |: (own_level &: mask));#  looped_pins <== inputs.uio_in;"
+  "masked pad still driven#lib/tt_core.ml#(combined_oe &: (~:mask))#combined_oe"
+  "loopback mask never written#lib/profile_table.ml#mux2 (we &&: (addr ==:. loopback_index)) data cur#cur"
 )
 
 caught=0

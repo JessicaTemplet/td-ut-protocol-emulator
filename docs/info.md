@@ -34,6 +34,16 @@ running XOR checksum of everything loaded (config bytes included) until
 `test/test_tt_um_dual_usb.ml` for the exact bit-level protocol and worked
 examples (SPI, I2C and USB low-speed receive run through these pins).
 
+### Self-test (nothing attached)
+
+The configuration byte at index 24 (the 25th strobed with `cfg_sel`) is a
+loopback mask: on a masked `uio` pin the chip reads its own output and does
+not drive the pad. `gl_test/selftest_vectors.json` is a complete program
+that sends a USB packet out through the transmit pipe and back in through
+the receive pipe on `uio[0]`, then raises PASS on `uio[4]` and DONE on
+`uio[5]`. DONE without PASS means the check failed. Inputs pass a 2-flop
+synchronizer, and a program that runs past its last loaded word halts.
+
 ## External hardware
 
 None required for basic bring-up; an external pull-up is needed on

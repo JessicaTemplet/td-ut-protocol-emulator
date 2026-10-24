@@ -30,7 +30,7 @@ run_step() {
 
 # Every Cyclesim suite (test/test_*.ml), in dependency order: unit blocks
 # first, then the engines, then whole-chip pin-level tests.
-SUITES="test_main test_timer test_engine test_engine_branch test_engine_pinmux test_loader test_system test_tt_um_system test_shadow_fifo test_shadow_fifo_exhaustive test_bitpipe test_glitch_filter test_engine_push test_protocol_engine test_dual test_dual_loader test_tt_um_dual test_spi_master test_i2c_master test_capture test_dual_capture test_tt_um_dual_spi test_tt_um_dual_i2c test_usb_rx test_tt_um_dual_usb test_txpipe test_dual_tx test_usb_transaction test_tt_um_dual_usb_tx test_clock_recovery test_usb_rx_recovery test_tt_um_dual_usb_rec test_link_health test_ethernet test_tt_um_dual_eth test_halt_guard"
+SUITES="test_main test_timer test_engine test_engine_branch test_engine_pinmux test_loader test_system test_tt_um_system test_shadow_fifo test_shadow_fifo_exhaustive test_bitpipe test_glitch_filter test_engine_push test_protocol_engine test_dual test_dual_loader test_tt_um_dual test_spi_master test_i2c_master test_capture test_dual_capture test_tt_um_dual_spi test_tt_um_dual_i2c test_usb_rx test_tt_um_dual_usb test_txpipe test_dual_tx test_usb_transaction test_tt_um_dual_usb_tx test_clock_recovery test_usb_rx_recovery test_tt_um_dual_usb_rec test_link_health test_ethernet test_tt_um_dual_eth test_halt_guard test_tt_um_dual_selftest"
 for s in $SUITES; do
   echo "=== $s ==="
   run_step "$s" 8 dune exec "./test/$s.exe"
@@ -44,11 +44,11 @@ if run_step run_main 8 scripts/run_main.sh; then
     || { echo "FAILED: src/tt_um_dual.v was stale (now regenerated; commit it)"; fail=1; }
 fi
 echo "=== gen_vectors (cocotb vectors must match the committed copy) ==="
-for v in spi i2c usb usb_tx usb_rec eth; do cp "gl_test/${v}_vectors.json" "$LOGS/${v}_vectors.before"; done
+for v in spi i2c usb usb_tx usb_rec eth selftest; do cp "gl_test/${v}_vectors.json" "$LOGS/${v}_vectors.before"; done
 # A failed generator leaves the committed files untouched, which would compare
 # equal, so its exit status is checked before the comparison.
 if run_step gen_vectors 0 scripts/run_gen_vectors.sh; then
-  for v in spi i2c usb usb_tx usb_rec eth; do
+  for v in spi i2c usb usb_tx usb_rec eth selftest; do
     cmp -s "gl_test/${v}_vectors.json" "$LOGS/${v}_vectors.before" \
       || { echo "FAILED: gl_test/${v}_vectors.json was stale (now regenerated; commit it)"; fail=1; }
   done
