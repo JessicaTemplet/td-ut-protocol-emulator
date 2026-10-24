@@ -1,10 +1,10 @@
 #!/bin/bash
 # Run the cocotb bench on the shipped Verilog.
-#   ./run_gl_test.sh          RTL (src/tt_um_dual.v + vendor SRAM model)
-#   ./run_gl_test.sh gates    gate level; expects gl_test/gate_level_netlist.v
+#   scripts/run_gl_test.sh          RTL (src/tt_um_dual.v + vendor SRAM model)
+#   scripts/run_gl_test.sh gates    gate level; expects gl_test/gate_level_netlist.v
 # Uses its own venv (.venv-cocotb, created on first run) so it never touches
 # the LibreLane/hardening environment.
-cd "$(dirname "$0")" || exit 1
+cd "$(dirname "$0")/.." || exit 1
 export PATH="$HOME/.local/bin:$PATH"
 if [ ! -x .venv-cocotb/bin/cocotb-config ]; then
   rm -rf .venv-cocotb
@@ -19,7 +19,6 @@ if [ ! -x .venv-cocotb/bin/cocotb-config ]; then
   fi
 fi
 source .venv-cocotb/bin/activate
-cp tt_um_dual.v src/tt_um_dual.v   # src/ copy is what LibreLane and this bench read
 cd gl_test || exit 1
 rm -rf sim_build results.xml
 # Locally the gate-level model needs the stdcell patch (see gl_test/Makefile);

@@ -18,7 +18,7 @@ external device on uio.
     uE1), compared cell by cell with the reference encoder's line.
 
 Microcode comes from {spi,i2c,usb,usb_tx}_vectors.json (regenerate:
-run_gen_vectors.sh).
+scripts/run_gen_vectors.sh).
 Written to run under cocotb 1.8 and 2.x.
 """
 

@@ -17,7 +17,7 @@
 # period 0.02 cycle low over 3000 bits) is below anything a test can
 # separate from jitter, so it would only ever "survive".
 set -u
-cd "$(dirname "$0")" || exit 1
+cd "$(dirname "$0")/.." || exit 1
 eval "$(opam env --switch=hardcaml-env)"
 # WSL wipes /tmp when it goes idle, so the scratch copy lives under ~
 WORK=$(mktemp -d "$HOME/.tx-mutation.XXXXXX")
