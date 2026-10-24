@@ -187,18 +187,24 @@ async def usb_recovered(dut, line):
         resolved(dut, cyc, len(line))
     out, oe = int(dut.uio_out.value), int(dut.uio_oe.value)
     flag = lambda p: ((oe >> p) & 1 == 1, (out >> p) & 1 == 1)
-    return flag(pin["flag_ok"]), flag(pin["flag_done"])
+    return flag(pin["flag_ok"]), flag(pin["flag_done"]), flag(pin["flag_degraded"])
 
 
 @cocotb.test()
 async def usb_receive_with_clock_recovery(dut):
     vec = vectors("usb_rec_vectors.json")
-    ok, done = await usb_recovered(dut, vec["good_line"])
+    ok, done, degraded = await usb_recovered(dut, vec["good_line"])
     assert done == (True, True), f"flag_done not driven high: {done}"
     assert ok == (True, True), f"packet from a 1.5%-fast sender not accepted: {ok}"
-    ok, done = await usb_recovered(dut, vec["bad_line"])
+    assert degraded[1] is False, "link flagged degraded on a 1.5%-fast, lightly jittered sender"
+    ok, done, _ = await usb_recovered(dut, vec["bad_line"])
     assert done == (True, True), f"flag_done not driven high (corrupted): {done}"
     assert ok == (True, False), f"corrupted packet was not rejected: {ok}"
+    # heavy jitter: the CRC still passes, the status word's margin warns
+    ok, done, degraded = await usb_recovered(dut, vec["jittery_line"])
+    assert done == (True, True), f"flag_done not driven high (jittery): {done}"
+    assert ok == (True, True), f"jittery packet not accepted: {ok}"
+    assert degraded == (True, True), f"heavy jitter not flagged degraded: {degraded}"
 
 
 @cocotb.test()

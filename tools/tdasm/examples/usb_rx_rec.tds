@@ -1,8 +1,8 @@
 ; USB low-speed receive with bit-clock recovery: the sample point follows
 ; the sender's clock (USB allows it to be 1.5% off), so the loop needs no
 ; calibrated waits. Same program and profile as gen_vectors.ml's
-; usb_rec_program / usb_protocol_prog / usb_rec_cfg_bytes.
-;   uio pins: 0 D-, 1 D+, 2 FLAG_OK, 3 FLAG_DONE
+; usb_rec_program / usb_rec_protocol_prog / usb_rec_cfg_bytes.
+;   uio pins: 0 D-, 1 D+, 2 FLAG_OK, 3 FLAG_DONE, 4 DEGRADED (timing margin)
 
 .prescale 0
 
@@ -40,7 +40,10 @@ eop:    pipe_status                 ; push {bytes, stuff_err, crc_ok}
 top:    pop
         br_bit1 15 status           ; bit 15 marks the status word
         br_bit0 15 top              ; data byte: skip it
-status: br_bit0 0 bad               ; crc_ok
+status: br_bit0 7 verdict           ; margin < 16/64 of a bit: link fine
+        emit 4 1                    ; DEGRADED: an edge a quarter bit or more off
+verdict:
+        br_bit0 0 bad               ; crc_ok
         br_bit1 1 bad               ; stuff_err
         br_bit0 2 bad               ; byte-aligned
         emit 2 1                    ; FLAG_OK

@@ -307,6 +307,28 @@ let usb_rec_program =
     ; wait_edge ~pin:7 ~falling:true ~payload:0
     ]
 
+(* µE1 for the recovery vector: test_usb_rx.ml's verdict, plus a DEGRADED
+   flag from the status word's margin (bit 7: an edge a quarter bit or
+   more off), raised whether or not the CRC passes *)
+let usb_flag_degraded = 4
+
+let usb_rec_protocol_prog =
+  Protocol_engine.
+    [ fifo_pop_instr
+    ; branch_word ~bit:15 ~branch_if_one:true ~target:3
+    ; branch_word ~bit:15 ~branch_if_one:false ~target:0
+    ; branch_word ~bit:7 ~branch_if_one:false ~target:5
+    ; emit_state ~pin:usb_flag_degraded ~level:true
+    ; branch_word ~bit:0 ~branch_if_one:false ~target:10
+    ; branch_word ~bit:1 ~branch_if_one:true ~target:10
+    ; branch_word ~bit:2 ~branch_if_one:false ~target:10
+    ; emit_state ~pin:usb_flag_ok ~level:true
+    ; branch_word ~bit:15 ~branch_if_one:true ~target:11
+    ; emit_state ~pin:usb_flag_ok ~level:false
+    ; emit_state ~pin:usb_flag_done ~level:true
+    ; fifo_pop_instr
+    ]
+
 let usb_rec_line ~offset ~jitter symbols =
   let seed = ref 12345 in
   let rnd () = seed := ((!seed * 1103515245) + 12345) land 0x7FFFFFFF; float_of_int (!seed lsr 8) /. 8388608.0 in
@@ -330,11 +352,13 @@ let () =
     let good = usb_packet_symbols usb_payload in
     let bad = List.mapi (fun i s -> if i = 40 then 1 - s else s) good in
     Printf.printf
-      "{\n  \"prescale\": 0,\n  \"offset\": 0.015,\n  \"cfg\": %s,\n  \"pins\": {\"dm\": %d, \"dp\": %d, \"flag_ok\": %d, \"flag_done\": %d},\n  \"phys\": %s,\n  \"protocol\": %s,\n  \"good_line\": %s,\n  \"bad_line\": %s\n}\n"
-      (json_list usb_rec_cfg_bytes) usb_dm usb_dp usb_flag_ok usb_flag_done (json_list usb_rec_program)
-      (json_list usb_protocol_prog)
+      "{\n  \"prescale\": 0,\n  \"offset\": 0.015,\n  \"cfg\": %s,\n  \"pins\": {\"dm\": %d, \"dp\": %d, \"flag_ok\": %d, \"flag_done\": %d, \"flag_degraded\": %d},\n  \"phys\": %s,\n  \"protocol\": %s,\n  \"good_line\": %s,\n  \"bad_line\": %s,\n  \"jittery_line\": %s\n}\n"
+      (json_list usb_rec_cfg_bytes) usb_dm usb_dp usb_flag_ok usb_flag_done usb_flag_degraded
+      (json_list usb_rec_program) (json_list usb_rec_protocol_prog)
       (json_list (usb_rec_line ~offset:0.015 ~jitter:2.0 good))
       (json_list (usb_rec_line ~offset:0.015 ~jitter:2.0 bad))
+      (* exact clock, heavy jitter: the CRC still passes, the margin warns *)
+      (json_list (usb_rec_line ~offset:0.0 ~jitter:7.0 good))
   | [ _; "usb_tx" ] ->
     Printf.printf
       "{\n  \"prescale\": 0,\n  \"cell\": %d,\n  \"cfg\": %s,\n  \"pins\": {\"dm\": %d, \"dp\": %d},\n  \"phys\": %s,\n  \"protocol\": %s,\n  \"symbols\": %s\n}\n"

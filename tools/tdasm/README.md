@@ -60,7 +60,9 @@ Comments start with `;` or `#`. Operands are separated by spaces or commas. Numb
 | `capture P` | Timestamped trace record of pin P into the FIFO. |
 | `pipe_bit P [sync]` | Bit pipe: one sample of pin P through NRZI, un-stuffing and CRC. With `sync` it first waits for the bit-clock recovery's sample strobe. |
 | `pipe_sync` | Wait for the bit-clock recovery's sample strobe without sampling (check the line, then `pipe_bit`). |
-| `pipe_status` | Push the bit-pipe status word (bit 15 set). |
+| `pipe_status` | Push the bit-pipe status word: bit 15 set, bytes, the clock recovery's timing margin (bits 7..3, 64ths of a bit), byte-aligned, stuffing error, CRC ok. |
+| `pipe_crc_lo` / `pipe_crc_hi` | Push the receive CRC register's low / high half: XORed with the residue, a bad packet's syndrome. |
+| `pipe_period` | Push the clock recovery's learned bit period (1/16ths of a cycle). |
 | `pipe_ctrl [reset] [idle_high] [crc_init] [tx_reset] [tx_crc] [sel_rx] [sel_tx] [p0..p3]` | Bit-pipe controls: receive-pipe reset / idle level / CRC reload, transmit-pipe reset and CRC append, and pointing the receive or transmit pipe at profile `pN`. |
 | `emit_tx P [open_drain] [diff]` | EMIT_TX: drive pin P with the transmit pipe's next line bit. `open_drain` drives the 0s and releases the 1s; `diff` also drives pin P xor 1 with the complement. |
 | `br_high P T` / `br_low P T` | BRANCH_COND on the current level of pin P. |

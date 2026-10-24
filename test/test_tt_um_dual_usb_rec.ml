@@ -82,15 +82,20 @@ let run json line =
       cycle ())
     line;
   let out = Bits.to_int !(outputs.uio_out) and oe = Bits.to_int !(outputs.uio_oe) in
-  (bit oe flag_ok = 1 && bit out flag_ok = 1, bit oe flag_done = 1 && bit out flag_done = 1)
+  let flag_degraded = pin json "flag_degraded" in
+  ( bit oe flag_ok = 1 && bit out flag_ok = 1
+  , bit oe flag_done = 1 && bit out flag_done = 1
+  , bit oe flag_degraded = 1 && bit out flag_degraded = 1 )
 
 let () =
   Printf.printf "=== USB RX with clock recovery through tt_um_dual's REAL pins (the committed vector) ===\n";
   let json = In_channel.with_open_text "gl_test/usb_rec_vectors.json" In_channel.input_all in
-  let ok, dn = run json (int_list json "good_line") in
-  Printf.printf "  1.5%%-fast jittery sender: flag_ok=%b flag_done=%b (expected true,true)\n" ok dn;
-  let ok2, dn2 = run json (int_list json "bad_line") in
+  let ok, dn, dg = run json (int_list json "good_line") in
+  Printf.printf "  1.5%%-fast jittery sender: flag_ok=%b flag_done=%b degraded=%b (expected true,true,false)\n" ok dn dg;
+  let ok2, dn2, _ = run json (int_list json "bad_line") in
   Printf.printf "  corrupted packet: flag_ok=%b flag_done=%b (expected false,true)\n" ok2 dn2;
-  let passed = ok && dn && (not ok2) && dn2 in
+  let ok3, dn3, dg3 = run json (int_list json "jittery_line") in
+  Printf.printf "  +-7 cycles of jitter: flag_ok=%b flag_done=%b degraded=%b (expected true,true,true)\n" ok3 dn3 dg3;
+  let passed = ok && dn && (not dg) && (not ok2) && dn2 && ok3 && dn3 && dg3 in
   Printf.printf "RESULT: %s\n" (if passed then "PASS" else "FAIL");
   if not passed then exit 1

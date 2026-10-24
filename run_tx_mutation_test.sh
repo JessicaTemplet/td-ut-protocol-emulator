@@ -23,7 +23,7 @@ eval "$(opam env --switch=hardcaml-env)"
 WORK=$(mktemp -d "$HOME/.tx-mutation.XXXXXX")
 trap 'rm -rf "$WORK"' EXIT
 
-TESTS="test_txpipe test_dual_tx test_usb_transaction test_clock_recovery test_usb_rx_recovery"
+TESTS="test_txpipe test_dual_tx test_usb_transaction test_clock_recovery test_usb_rx_recovery test_link_health"
 
 # name # file # text to find (must occur exactly once) # replacement
 MUTATIONS=(
@@ -44,7 +44,11 @@ MUTATIONS=(
   "recovery: acceptance window ignored#lib/clock_recovery.ml#let within = (c.rec_window ==:. 0) |: (mag <=: window) in#let within = vdd in"
   "recovery: period learning sign flipped#lib/clock_recovery.ml#let next = cur +: fstep in#let next = cur -: fstep in"
   "recovery: strobe at the boundary, not mid-bit#lib/clock_recovery.ml#&&: (phw <: half) &&: (v_wrapped >=: half)#&&: (v >=: p)"
-  "PIPE_BIT sync does not wait for the strobe#lib/engine.ml#       |: (bit_sync &&: (~:(rec_.Clock_recovery.O.pending))))#)"
+  "PIPE_BIT sync does not wait for the strobe#lib/engine.ml#       |: (bit_sync &&: (~:(rec_.Clock_recovery.O.pending)))#"
+  "margin keeps the last edge, not the worst#lib/clock_recovery.ml#let bigger = running &&: edge &&: (mag >: worst) in#let bigger = running &&: edge in"
+  "margin scaled by 32, not 64#lib/clock_recovery.ml#(sll (uresize worst dw) 6)#(sll (uresize worst dw) 5)"
+  "status word drops the margin#lib/bitpipe.ml#concat_msb [ vdd; nbytes; i.margin;#concat_msb [ vdd; nbytes; zero 5;"
+  "PIPE_STATUS crc_lo reads the high half#lib/engine.ml#      ; select bp.Bitpipe.O.crc 15 0#      ; select bp.Bitpipe.O.crc 31 16"
 )
 
 caught=0

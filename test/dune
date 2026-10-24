@@ -168,3 +168,8 @@
  (name test_tt_um_dual_usb_rec)
  (modules test_tt_um_dual_usb_rec)
  (libraries hardcaml tt_core))
+
+(executable
+ (name test_link_health)
+ (modules test_link_health)
+ (libraries hardcaml tt_core))

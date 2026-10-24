@@ -180,6 +180,7 @@ module I = struct
     ctrl_reset    : 'a;
     ctrl_crc_init : 'a;
     prev_init     : 'a;
+    margin        : 'a; [@bits 5] (* clock recovery's timing margin, for the status word *)
   } [@@deriving sexp_of, hardcaml]
 end
 
@@ -259,7 +260,7 @@ let create (i : Signal.t I.t) =
   (* status record pushed by PIPE_STATUS: bit 15 marks it as a status word
      (data bytes are zero-extended, so bit 15 is 0 for them) *)
   let status =
-    concat_msb [ vdd; nbytes; zero 5; bitcnt ==:. 0; stuff_err; crc_ok ]
+    concat_msb [ vdd; nbytes; i.margin; bitcnt ==:. 0; stuff_err; crc_ok ]
   in
   { O.byte_done
   ; byte_data = acc_next

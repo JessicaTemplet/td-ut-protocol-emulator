@@ -82,6 +82,8 @@ module O = struct
     error       : 'a; [@bits 21] (* signed phase error of this cycle's edge *)
     armed       : 'a;
     period      : 'a; [@bits 21] (* the bit period in use, 12.8 fixed point *)
+    margin      : 'a; [@bits 5] (* worst edge error since arm, 64ths of a bit *)
+    margin_busy : 'a; (* the margin is being recomputed *)
   } [@@deriving sexp_of, hardcaml]
 end
 
@@ -153,6 +155,47 @@ let create (i : Signal.t I.t) =
     reg_fb ~enable:(one 1) spec ~width:1 ~f:(fun cur ->
       mux2 i.arm gnd (cur |: (strobe &: pending &: (~:(i.consume)))))
   in
+  (* ---- link health: timing margin ----
+     `worst` is the largest |error| of any edge since `arm`, accepted or
+     rejected (a rejected edge is the worst news of all). The reported
+     margin is that error as a fraction of the bit period,
+     floor(64 * worst / P) saturated at 31, so one threshold means the same
+     for every protocol: bit 4 (16) = an edge a quarter bit or more off.
+     The division runs on a small sequential divider, one quotient bit per
+     cycle (6 cycles), restarted whenever `worst` grows; `margin_busy`
+     holds PIPE_STATUS until it has finished, which after a packet's last
+     edge it always has (USB: the EOP is two bit cells long). *)
+  let dw = w + 6 in
+  let worst = wire w in
+  let bigger = running &&: edge &&: (mag >: worst) in
+  worst
+  <== reg_fb ~enable:(one 1) spec ~width:w ~f:(fun cur ->
+        mux2 i.arm (zero w) (mux2 bigger mag cur));
+  let start = reg spec (bigger &: (~:(i.arm))) in
+  let busy = wire 1 and idx = wire 3 and rem = wire dw and q = wire 6 in
+  let pd = uresize p dw in
+  let d = mux idx (List.init 6 (fun s -> sll pd s)) in
+  let ge = rem >=: d in
+  let bit_now = mux idx (List.init 6 (fun s -> of_int ~width:6 (1 lsl s))) in
+  let q_next = mux2 ge (q |: bit_now) q in
+  let last = busy &: (idx ==:. 0) in
+  rem
+  <== reg_fb ~enable:(one 1) spec ~width:dw ~f:(fun cur ->
+        mux2 start (sll (uresize worst dw) 6) (mux2 (busy &: ge) (cur -: d) cur));
+  idx
+  <== reg_fb ~enable:(one 1) spec ~width:3 ~f:(fun cur ->
+        mux2 start (of_int ~width:3 5) (mux2 busy (cur -:. 1) cur));
+  q
+  <== reg_fb ~enable:(one 1) spec ~width:6 ~f:(fun cur ->
+        mux2 start (zero 6) (mux2 busy q_next cur));
+  busy
+  <== reg_fb ~enable:(one 1) spec ~width:1 ~f:(fun cur ->
+        mux2 (i.arm |: start) start (mux2 last gnd cur));
+  let margin =
+    reg_fb ~enable:(one 1) spec ~width:5 ~f:(fun cur ->
+      mux2 i.arm (zero 5)
+        (mux2 last (mux2 (msb q_next) (of_int ~width:5 31) (select q_next 4 0)) cur))
+  in
   { O.strobe
   ; pending
   ; overrun
@@ -161,4 +204,6 @@ let create (i : Signal.t I.t) =
   ; error
   ; armed
   ; period = p
+  ; margin
+  ; margin_busy = bigger |: start |: busy
   }

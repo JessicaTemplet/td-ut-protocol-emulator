@@ -343,3 +343,38 @@ see it. A receive program must wait for the idle level before arming (`br_low 0 
 **Not claimed.** Link-health reporting (timing margin and CRC syndrome in the status word), Manchester decoding and
 10 Mbit Ethernet are the next items. Not re-hardened yet: the recovery and the wider profiles add flops and a 21-bit
 datapath whose timing is unmeasured.
+
+### Deviation 10: Link-health reporting (2026-10-24)
+
+**What changed.** The receive path now reports how well it is coping, not only whether a CRC came out right, which
+makes the receive side a three-layer error-handling stack: suppression (glitch filter, acceptance window), mitigation
+(clock recovery), detection (CRC, stuffing errors, and now margin and syndrome).
+
+- **Timing margin** in the status word's free bits [7:3]: the worst distance between any edge since arm and where the
+  clock recovery expected it (accepted or rejected edges alike), as floor(64 x error / P) saturated at 31. Scaling by
+  the bit period makes one threshold mean the same for every protocol: bit 7 is "an edge a quarter bit or more off",
+  one `br_bit1 7` away for µE1. The division is a 6-cycle sequential divider restarted whenever the worst error grows;
+  `PIPE_STATUS` waits for it (it has always finished by then on USB, whose end of packet is two bit cells long).
+- **`PIPE_STATUS` word select** (payload[1:0]) instead of a multi-word sequencer: 1 and 2 push the receive CRC
+  register's halves (XORed with the residue: the syndrome of a bad packet), 3 the clock recovery's learned period, which
+  µE1 can `CFG_WR` back into a profile. One push each, so nothing new to sequence or stall.
+
+**Reported, never corrected.** A receiver that repaired a single-bit error would accept packets a standards-compliant
+device rejects, which is wrong for an emulator. The chip hands the host the syndrome; the host decides.
+
+**What was verified (`test_link_health`).**
+- The margin is exact: one edge displaced by k cycles after a clean lock reports floor(64|k|/33) for k = 1, 2, 3, 5, 8
+  and -2, -5, -8; the worst of several is kept; a clean line reports 0.
+- On USB packets the mean margin never falls as the sender's offset grows (0.0, 1.0, 2.0, 2.0, 3.0 at 0 to 2%) or as the
+  jitter grows (0.0, 2.0, 5.2, 8.3, 10.5 at 0 to 4 cycles).
+- Syndromes: for every one of the 80 single-bit errors in a DATA0 packet's data and CRC, the CRC register µE1 reads,
+  XORed with the residue, equals an independent host model of that error's syndrome, and no two positions share one:
+  the host can say which bit was wrong. A good packet reads exactly the residue.
+- The learned period µE1 reads back for a 1.5%-fast sender: 33.500 cycles (the sender's is 33.495).
+- **Warning before failure:** a µE1 program raising a DEGRADED pin from status bit 7, one packet per jitter level: no
+  flag at 0, 2 or 4 cycles; flagged with the CRC still good at 6 and 8; CRC failing at 10. The same check runs through
+  the real pins in Cyclesim and on the shipped Verilog in cocotb (a committed vector with +-7 cycles of jitter: CRC ok,
+  DEGRADED high; the 1.5%-fast, lightly jittered sender: DEGRADED low).
+- Mutation check: margin keeping the last edge instead of the worst, a 32 instead of 64 scale, the status word dropping
+  the margin, and `crc_lo` reading the high half are each caught; 22 of 22 in all. Not exercised by any test: the
+  `PIPE_STATUS` wait for the divider, because every program here issues `PIPE_STATUS` long after the last edge.

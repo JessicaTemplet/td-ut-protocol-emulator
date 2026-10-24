@@ -20,8 +20,9 @@ bit-stuffing, CRC), a glitch filter, and a USB low-speed receive demo (items 6 a
 **In progress (not yet hardened):** the next features from `design_note_tx_clock_recovery.md`, built together so the
 chip is re-hardened once. Done so far: a transmit path that mirrors the bit pipe, with data decided at run time by µE1,
 a runtime profile table (separate receive and transmit profiles, switched and rewritten while running), and bit-clock
-recovery (a second-order digital PLL the receive loop samples from). Next: link-health reporting, 10 Mbit Ethernet
-receive, then a 70 MHz harden attempt (50 MHz fallback). See Deviations 8 and 9 and Build log sections 9 and 10. The last hardened numbers below are from before this work.
+recovery (a second-order digital PLL the receive loop samples from), and link-health reporting (timing margin in the
+status word, CRC syndrome, learned period). Next: 10 Mbit Ethernet receive, then a 70 MHz harden attempt (50 MHz
+fallback). See Deviations 8 to 10 and Build log sections 9 to 11. The last hardened numbers below are from before this work.
 
 ## The original 10-item plan, and what happened to each
 
@@ -438,7 +439,22 @@ Reasons and the measured gain choice are in `docs/design/design_rationale.txt`, 
 `test_tt_um_dual_usb_rec` and cocotb `usb_receive_with_clock_recovery` on the same committed vector, `tdasm`
 (`usb_rx_rec.tds` matches the vector), mutation check 18 of 18. Not yet hardened.
 
-## 11. Practical notes
+## 11. Link-health reporting
+
+Reasons are in `docs/design/design_rationale.txt`, Deviation 10.
+
+- `clock_recovery.ml`: the worst edge error since arm, and a 6-cycle sequential divider turning it into 64ths of the bit
+  period (`margin`, `margin_busy`).
+- Status word bits [7:3] carry the margin; `PIPE_STATUS` waits while the divider is busy. `PIPE_STATUS` payload[1:0]
+  selects the word: status, CRC low half, CRC high half, learned period (`pipe_crc_lo`, `pipe_crc_hi`, `pipe_period`).
+- The recovery gl_test vector gained a DEGRADED flag (µE1 pin 4, from status bit 7) and a third line with +-7 cycles of
+  jitter; `tdasm`'s `usb_rx_rec.tds` and the Cyclesim twin follow it.
+
+All checks passed on the first run. **Verified:** `test_link_health` (exact margin, monotonic with offset and jitter,
+80-of-80 syndromes located, learned period, the degraded flag ahead of CRC failure), the same flag through the pins
+and in cocotb, mutation check 22 of 22, `tdasm` parity. Not yet hardened.
+
+## 12. Practical notes
 
 - Dune quirk: `lib/tt_core.ml` shares its name with the library, which suppresses automatic submodule aliasing, so
   sibling modules need explicit `module X = X` lines in `tt_core.ml`.

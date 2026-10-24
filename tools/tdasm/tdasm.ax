@@ -632,6 +632,23 @@
         (arity a ln ts 0)
         (enc 2 0 1 512)
       }
+      ; the other PIPE_STATUS words: CRC register halves (a bad packet's
+      ; syndrome) and the clock recovery's learned period
+      (strEq m "pipe_crc_lo")
+      {
+        (arity a ln ts 0)
+        (enc 2 0 1 513)
+      }
+      (strEq m "pipe_crc_hi")
+      {
+        (arity a ln ts 0)
+        (enc 2 0 1 514)
+      }
+      (strEq m "pipe_period")
+      {
+        (arity a ln ts 0)
+        (enc 2 0 1 515)
+      }
       (strEq m "pipe_ctrl")
       (let ((r (pipeCtrlOps a ln ts)))
         (enc 2 (>> r 16) 1 (| 768 (& r 255))))

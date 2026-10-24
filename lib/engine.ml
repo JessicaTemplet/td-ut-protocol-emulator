@@ -109,8 +109,15 @@ open Signal
                                follows the sender's clock instead of a
                                timer. payload[1] = nostep: only that wait,
                                no sample (`pipe_sync`).
-                 2 PIPE_STATUS push a status word {1, bytes, 5'b0, aligned,
-                               stuff_err, crc_ok} to the FIFO (bit 15 marks
+                 2 PIPE_STATUS push a status word {1, bytes, margin, aligned,
+                               stuff_err, crc_ok} to the FIFO; margin is
+                               the clock recovery's worst edge error since
+                               arm in 64ths of a bit (0 without recovery;
+                               the instruction waits the few cycles the
+                               margin's divider may still need).
+                               payload[1:0] = 1, 2: the CRC register's low
+                               / high half instead (the syndrome of a bad
+                               packet); 3: the learned bit period. (bit 15 marks
                                it so the protocol engine can tell it from
                                a zero-extended data byte).
                  3 PIPE_CTRL   payload[0] reset the stream, payload[1] idle
@@ -325,10 +332,16 @@ let pipe_bit_sync ~pin = pipe_sub 1 ~pin ~ops:1
    for USB's SE0, and steps with a plain PIPE_BIT right after). *)
 let pipe_sync = pipe_sub 1 ~pin:0 ~ops:3
 
-(* PIPE_STATUS: push one 16-bit status record {1, bytes[6:0], 5'b0,
+(* PIPE_STATUS: push one 16-bit status record {1, bytes[6:0], margin[4:0],
    aligned, stuff_err, crc_ok} to the FIFO. Bit 15 marks it as a status
    word (data bytes are zero-extended). *)
 let pipe_status = pipe_sub 2 ~pin:0 ~ops:0
+
+(* The other PIPE_STATUS words: the CRC register (low / high half) and the
+   clock recovery's learned period (bits 19..4). *)
+let pipe_crc_lo = pipe_sub 2 ~pin:0 ~ops:1
+let pipe_crc_hi = pipe_sub 2 ~pin:0 ~ops:2
+let pipe_period = pipe_sub 2 ~pin:0 ~ops:3
 
 (* PIPE_CTRL: [reset] clears the stream state and loads the idle line level
    `prev_level` for NRZI; [crc_init] reloads only the CRC (USB: the CRC covers
@@ -548,6 +561,7 @@ let create_generic ~build_instr (inputs : Signal.t I.t) =
       ; ctrl_reset = rx_reset
       ; ctrl_crc_init = now_or_later (pbit 2) |: inputs.ext_rx_crc_init
       ; prev_init = prev_level
+      ; margin = rec_.Clock_recovery.O.margin
       }
   in
   let tx =
@@ -571,7 +585,8 @@ let create_generic ~build_instr (inputs : Signal.t I.t) =
   let shift_advance_ok =
     ~:((would_push &&: inputs.push_stall)
        |: (is_emit_tx &&: tx.Txpipe.O.would_stall)
-       |: (bit_sync &&: (~:(rec_.Clock_recovery.O.pending))))
+       |: (bit_sync &&: (~:(rec_.Clock_recovery.O.pending)))
+       |: (is_pipe_status &&: rec_.Clock_recovery.O.margin_busy))
   in
   advance <== (inputs.run &&: mux2 is_wait wait_condition shift_advance_ok);
 
@@ -685,7 +700,20 @@ let create_generic ~build_instr (inputs : Signal.t I.t) =
      it does not touch the capture `elapsed` counter. *)
   let status_now = advance &&: is_pipe_status in
   let capture_ready = reg spec (capture_now ||: status_now) in
-  let capture_data = reg spec (mux2 status_now bp.Bitpipe.O.status capture_data_now) in
+  (* PIPE_STATUS payload[1:0] picks the word: the status record, the CRC
+     register's low or high half (a bad packet's syndrome, for the host to
+     locate a single-bit error), or the learned bit period (12.8 fixed
+     point, bits 19..4: integer cycles and 1/16ths), which µE1 can CFG_WR
+     back into a profile *)
+  let status_word =
+    mux (select payload 1 0)
+      [ bp.Bitpipe.O.status
+      ; select bp.Bitpipe.O.crc 15 0
+      ; select bp.Bitpipe.O.crc 31 16
+      ; select rec_.Clock_recovery.O.period 19 4
+      ]
+  in
+  let capture_data = reg spec (mux2 status_now status_word capture_data_now) in
 
   { O.sample_pulse = inputs.run &&: is_shift
   ; sampled_bit = rx_pin
