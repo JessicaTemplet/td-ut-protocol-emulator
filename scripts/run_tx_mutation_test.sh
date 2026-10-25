@@ -44,7 +44,7 @@ MUTATIONS=(
   "timer expires on a load cycle (old bug)#lib/timer.ml#main_zero &&: (~:(inputs.load))#main_zero"
   "recovery: phase correction sign flipped#lib/clock_recovery.ml#let v_wrapped = mux2 accept (mux2 neg up down) stay in#let v_wrapped = mux2 accept (mux2 neg down up) stay in"
   "recovery: acceptance window ignored#lib/clock_recovery.ml#((c.rec_window ==:. 0) |: (mag <=: window))#vdd"
-  "recovery: period learning sign flipped#lib/clock_recovery.ml#let next = cur +: fstep in#let next = cur -: fstep in"
+  "recovery: period learning sign flipped#lib/clock_recovery.ml#let next = mux2 neg (cur -: sm) (cur +: sm) in#let neg = ~:neg in let next = mux2 neg (cur -: sm) (cur +: sm) in"
   "recovery: strobe at the boundary, not mid-bit#lib/clock_recovery.ml#&&: (phw <: half) &&: (wraps_past half)#&&: (v_wrapped <: phw)"
   "PIPE_BIT sync does not wait for the strobe#lib/engine.ml#       |: (bit_sync &&: (~:(rec_.Clock_recovery.O.pending)))#"
   "margin keeps the last edge, not the worst#lib/clock_recovery.ml#let bigger = measured &&: (mag >: worst) in#let bigger = measured in"

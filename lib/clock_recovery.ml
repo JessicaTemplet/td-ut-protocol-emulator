@@ -164,7 +164,8 @@ let create (i : Signal.t I.t) =
      mostly cancels that (measured over 3000 bits with symmetric jitter:
      the learned period ends 0.02 cycle lower with the plain shift), so
      this is the symmetric choice rather than a fix for a visible fault. *)
-  let shift_toward_zero s = mux2 neg (negate (srl mag s)) (srl mag s) in
+  (* (shifting the magnitude and applying the sign afterwards, in the period
+     update below) *)
   let shifted_mag = mux c.rec_gain (List.init 8 (fun s -> srl mag s)) in
 
   let manch = c.manchester in
@@ -252,12 +253,28 @@ let create (i : Signal.t I.t) =
   let bit_valid = check &: held_valid &: (~:ending) &: (~:frame_end) in
 
   (* integral path: learn the period, within P +- P/16 *)
-  let fstep = mux c.rec_fshift (List.init 8 shift_toward_zero) in
   let p_lo = p_cfg -: srl p_cfg 4 and p_hi = p_cfg +: srl p_cfg 4 in
+  (* next = cur + fstep, fstep = +-sm (the error shifted toward zero), then
+     clamped to [p_lo, p_hi]. Computed as the sum and the difference in
+     parallel, each clamp compare rewritten as sm against a bound that does
+     not depend on it (cur + sm < p_lo <=> sm < p_lo - cur, ...), so after sm
+     there is one compare and the muxes instead of a negate, an add and a
+     compare (timing: the 60 MHz harden's only failing path ended here). In
+     w + 2 signed bits nothing overflows. Bit-exact with the plain form,
+     including its one wrap: cur - sm below zero reads, unsigned, as a huge
+     value, which is not below p_lo and is above p_hi. *)
+  let sm = mux c.rec_fshift (List.init 8 (fun s -> srl mag s)) in
   p_est
   <== reg_fb ~enable:(one 1) spec ~width:w ~f:(fun cur ->
-        let next = cur +: fstep in
-        let clamped = mux2 (next <: p_lo) p_lo (mux2 (next >: p_hi) p_hi next) in
+        let s v = sresize v (w + 2) in
+        let sms = s sm and cs = s cur and lo_s = s p_lo and hi_s = s p_hi in
+        let up_lo = sms <+ (lo_s -: cs) and up_hi = sms >+ (hi_s -: cs) in
+        let dn_wraps = sms >+ cs in
+        let dn_lo = (~:dn_wraps) &: (sms >+ (cs -: lo_s)) in
+        let dn_hi = dn_wraps |: (sms <+ (cs -: hi_s)) in
+        let next = mux2 neg (cur -: sm) (cur +: sm) in
+        let lo_hit = mux2 neg dn_lo up_lo and hi_hit = mux2 neg dn_hi up_hi in
+        let clamped = mux2 lo_hit p_lo (mux2 hi_hit p_hi next) in
         mux2 (i.arm |: (~:(c.rec_en))) p_cfg (mux2 accept clamped cur));
 
   let pending =

@@ -10,7 +10,7 @@ project:
   top_module: "tt_um_dual"
   source_files:
     - "tt_um_dual.v"
-  clock_hz: 70000000
+  clock_hz: 60000000
 
 pinout:
   ui[0]: "Loader data_in bit 0 (byte-serial program load, pre-run only)"

@@ -1,8 +1,8 @@
 {
   "RUN_CTS": 1,
   "CLOCK_PORT": "clk",
-  "//": "period is in ns; 14.286ns == 70MHz, matching info.yaml's clock_hz. 70 MHz is where 10 Mbit Ethernet gets 7 clocks a bit (the measured tolerance in design_rationale Deviation 11); the 50 MHz harden closed with setup WNS +7.3 ns, and its critical path (SRAM read at the slow corner, ~12.4 ns) left ~1.6 ns of predicted slack at 70 MHz before resizing. Fallbacks if any corner fails setup or hold: 60 MHz (16.667), then 50 MHz (20).",
-  "CLOCK_PERIOD": 14.286,
+  "//": "period is in ns; 16.667ns == 60MHz, matching info.yaml's clock_hz. Second rung of the 70 / 60 / 50 MHz ladder (design_rationale Deviation 13): the 70 MHz harden met typical and fast but failed setup at the slow corner by 4.23 ns (instruction SRAM through decode, and the clock recovery's frame-end check, since cut). Neither Ethernet (5 clocks a bit at 50 MHz, measured) nor USB low speed (33 clocks a bit at 50 MHz) needs 70. Next fallback: 50 MHz (20).",
+  "CLOCK_PERIOD": 16.667,
   "DESIGN_IS_CORE": false,
   "//tmpl0": "-- Baseline tunables adopted from TinyTapeout/ttihp-verilog-template@cmos5l's src/config.json (the project's own maintained default for this PDK), not re-derived from the old sg13g2 config -- this PDK may need different defaults than sg13g2 did and there's no reason to guess when the vendor's own template states them directly.",
   "PL_TARGET_DENSITY_PCT": 60,

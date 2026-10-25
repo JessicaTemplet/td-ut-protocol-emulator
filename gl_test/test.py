@@ -54,7 +54,7 @@ async def pulse_byte(dut, engine_sel, byte_sel, data, cfg_sel=0):
 
 
 async def reset(dut):
-    cocotb.start_soon(Clock(dut.clk, 14286, "ps").start())  # 70 MHz (info.yaml clock_hz)
+    cocotb.start_soon(Clock(dut.clk, 16667, "ps").start())  # 60 MHz (info.yaml clock_hz)
     dut.ena.value = 1
     dut.ui_in.value = 0
     dut.uio_in.value = 0
