@@ -21,7 +21,7 @@ external device on uio.
     and uE1 raises PASS. The pad is toggled by the bench and must never be
     driven.
 
-Microcode comes from {spi,i2c,usb,usb_tx,usb_rec,eth,selftest}_vectors.json (regenerate:
+Microcode comes from {spi,i2c,usb,usb_tx,usb_rec,eth,selftest,shadow}_vectors.json (regenerate:
 scripts/run_gen_vectors.sh).
 Written to run under cocotb 1.8 and 2.x.
 """
@@ -296,6 +296,48 @@ async def loopback_self_test(dut):
     for name in ("done", "ok"):
         k = pin[name]
         assert (e >> k) & 1 and (o >> k) & 1, f"self-test {name.upper()} flag not raised"
+
+
+@cocotb.test()
+async def shadow_self_check(dut):
+    """Shadow on-chip check, nothing attached: uio pin 4 looped back; uE1 holds
+    it high in Drive; uE0 in Shadow claims high, low (wrong), high. The host
+    reads uE0's trace through ui_in/uo_out: exactly a mismatch record (pc 4,
+    pin 4, actual high) and an episode-end record (pc 6). The bench toggles
+    the looped pad, which must never be driven."""
+    vec = vectors("shadow_vectors.json")
+    line = vec["pins"]["line"]
+    await load_and_go(dut, vec)
+    dut.ui_in.value = 0
+    total = 400
+    for cyc in range(total):
+        dut.uio_in.value = 0xBF if cyc & 1 else 0x00  # pin 6 (uE0's final wait) stays low
+        await RisingEdge(dut.clk)
+        await Timer(1, "ns")
+        resolved(dut, cyc, total)
+        assert not (int(dut.uio_oe.value) >> line) & 1, f"looped pin's pad driven at cycle {cyc}"
+    dut.uio_in.value = 0
+
+    async def ask(ui):
+        dut.ui_in.value = ui
+        await ClockCycles(dut.clk, 3)
+        await Timer(1, "ns")
+        return int(dut.uo_out.value)
+
+    status = await ask(0x82)
+    assert status & 7 == len(vec["records"]) and (status >> 3) & 7 == 0, f"trace status {status:#x}"
+    for want in vec["records"]:
+        r = 0
+        for k in range(8):
+            r |= (await ask(0x80 | (k << 3))) << (8 * k)
+        await ask(0x84)
+        await ask(0x80)
+        assert r >> 63 == want["end"], f"record {r:#018x}: type"
+        assert (r >> 54) & 0x1FF == want["pc"], f"record {r:#018x}: pc"
+        if "mask" in want:
+            assert (r >> 46) & 0xFF == want["mask"], f"record {r:#018x}: mask"
+            assert (r >> 38) & want["mask"], f"record {r:#018x}: actual level"
+    assert (await ask(0x82)) & 0x3F == 0, "trace not empty after reading every record"
 
 
 @cocotb.test()

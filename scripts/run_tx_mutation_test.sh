@@ -25,7 +25,7 @@ eval "$(opam env --switch=hardcaml-env)"
 WORK=$(mktemp -d "$HOME/.tx-mutation.XXXXXX")
 trap 'rm -rf "$WORK"' EXIT
 
-TESTS="test_txpipe test_dual_tx test_usb_transaction test_clock_recovery test_usb_rx_recovery test_link_health test_ethernet test_dual test_halt_guard test_tt_um_dual_selftest test_profile_switch"
+TESTS="test_txpipe test_dual_tx test_usb_transaction test_clock_recovery test_usb_rx_recovery test_link_health test_ethernet test_dual test_halt_guard test_tt_um_dual_selftest test_profile_switch test_shadow test_tt_um_dual_shadow"
 
 # name # file # text to find (must occur exactly once) # replacement
 MUTATIONS=(
@@ -63,9 +63,18 @@ MUTATIONS=(
   "halt guard ignores branches past the program (tracks the first write only)#lib/halt_guard.ml#mux2 (write_enable &&: (addr >=: cur)) (addr +:. 1) cur#mux2 (write_enable &&: (cur ==:. 0)) (addr +:. 1) cur"
   "loopback mask ignored (engines read the pad)#lib/tt_core.ml#  looped_pins <== ((inputs.uio_in &: (~:mask)) |: (own_level &: mask));#  looped_pins <== inputs.uio_in;"
   "masked pad still driven#lib/tt_core.ml#(combined_oe &: (~:mask))#combined_oe"
-  "loopback mask never written#lib/profile_table.ml#mux2 (we &&: (addr ==:. loopback_index)) data cur#cur"
+  "loopback mask never written#lib/profile_table.ml#let loopback = pin_byte loopback_index in#let loopback = zero 8 in"
   "profile switch: controls act one cycle early (CRC reload on the old profile)#lib/profile_table.ml#let select_latency = 2#let select_latency = 1"
   "profile switch: no interlock (a pipe instruction runs before the switch lands)#lib/profile_table.ml#  go select_latency sel Signal.gnd#  ignore (go select_latency sel Signal.gnd); Signal.gnd"
+  "shadow: compare inverted#lib/shadow.ml#let mask = (i.pins_in ^: i.pins_out) &: i.pins_oe in#let mask = (~:(i.pins_in ^: i.pins_out)) &: i.pins_oe in"
+  "shadow: released pins checked too (claim mask ignored)#lib/shadow.ml#let mask = (i.pins_in ^: i.pins_out) &: i.pins_oe in#let mask = i.pins_in ^: i.pins_out in"
+  "shadow: no storm suppression (every mismatching compare logs)#lib/shadow.ml#let opens = bad &: (~:in_episode) in#let opens = bad in"
+  "shadow: settle off by one#lib/shadow.ml#mux2 claim (i.settle -:. 1)#mux2 claim i.settle"
+  "shadow: dropped records never counted#lib/shadow.ml#(mux2 (want &: i.full &: (cur <>:. 63)) (cur +:. 1) cur)#cur"
+  "shadow: a Shadow engine still drives its pads#lib/dual.ml#engine_out.Engine.O.pins_oe &: repeat (~:e0_shadow) 8#engine_out.Engine.O.pins_oe"
+  "shadow: the two engines' streams swapped on pop#lib/tt_core.ml#; trace_pop0 = pop_edge &: (~:t_engine)#; trace_pop0 = pop_edge &: t_engine"
+  "trace readout: active without the mode bit#lib/tt_core.ml#let view = trace_on &: select ui 7 7 in#let view = select ui 7 7 in"
+  "trace readout: pops on the level, not the edge#lib/tt_core.ml#let pop_edge = pop_level &: (~:(reg sync_spec pop_level)) in#let pop_edge = pop_level in"
 )
 
 caught=0

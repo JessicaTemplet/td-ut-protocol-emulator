@@ -118,6 +118,8 @@ module O = struct
     sel_tx    : 'a;
     sel_id    : 'a; [@bits 2]
     rx_crc_init : 'a;
+    emit_claim  : 'a; (* registered: pins_out/pins_oe changed at the last edge (shadow.ml) *)
+    claim_pc    : 'a; [@bits 9]
   } [@@deriving sexp_of, hardcaml]
 end
 
@@ -285,6 +287,8 @@ let create_generic ~build_instr (inputs : Signal.t I.t) =
   ; sel_tx = do_profile &&: pbit 3
   ; sel_id = select payload 1 0
   ; rx_crc_init = Profile_table.after_select spec (do_profile &&: pbit 4)
+  ; emit_claim = reg spec (run &&: is_emit)
+  ; claim_pc = reg spec pc
   }
 
 let create (inputs : Signal.t I.t) = create_generic ~build_instr:behavioral_ram inputs

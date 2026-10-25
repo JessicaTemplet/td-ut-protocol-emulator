@@ -98,6 +98,8 @@ module I = struct
     cfg_we                : 'a;
     cfg_addr              : 'a; [@bits 7]
     cfg_data              : 'a; [@bits 8]
+    trace_pop0            : 'a; (* pop µE0's / µE1's Shadow trace FIFO *)
+    trace_pop1            : 'a;
   } [@@deriving sexp_of, hardcaml]
 end
 
@@ -119,6 +121,11 @@ module O = struct
     rx_profile         : 'a; [@bits 2]
     tx_profile         : 'a; [@bits 2]
     loopback           : 'a; [@bits 8]
+    shadow_mode        : 'a; [@bits 8]
+    trace0_head        : 'a; [@bits 64] (* oldest record, valid while count > 0 *)
+    trace0_count       : 'a; [@bits 3]
+    trace1_head        : 'a; [@bits 64]
+    trace1_count       : 'a; [@bits 3]
   } [@@deriving sexp_of, hardcaml]
 end
 
@@ -261,14 +268,69 @@ let create_generic ~engine_create ~protocol_create (inputs : Signal.t I.t) =
   e1_sel_id <== protocol_out.Protocol_engine.O.sel_id;
   protocol_crc_init <== protocol_out.Protocol_engine.O.rx_crc_init;
 
+  (* Shadow (shadow.ml). One timestamp for both engines, zero until run and
+     counting from its rise: both trace streams share that epoch by
+     construction, so the host merges them by timestamp. Each engine has its
+     own comparator and its own 4 x 64 trace FIFO; a full FIFO drops, never
+     stalls. In Shadow an engine's pads are released (its output enables
+     masked here), so its pins_out/pins_oe registers are a claim only. *)
+  let mode = table.Profile_table.O.shadow_mode in
+  let mbit m = (mode &: of_int ~width:8 m) <>:. 0 in
+  let e0_shadow = mbit Profile_table.mode_e0_shadow in
+  let e1_shadow = mbit Profile_table.mode_e1_shadow in
+  let timestamp =
+    reg_fb ~enable:(one 1) sync_spec ~width:32 ~f:(fun cur ->
+      mux2 inputs.run (cur +:. 1) (zero 32))
+  in
+  let trace ~enable ~settle ~claim ~claim_pc ~pins_out ~pins_oe ~pop =
+    let push = wire 1 and record = wire Shadow.record_bits in
+    let head, _, full, count =
+      Shadow_fifo.create_sized ~depth:4 ~ptr_width:2 ~clk:inputs.clk ~rst_n:inputs.rst_n ~push
+        ~push_data:record ~pop
+    in
+    let s =
+      Shadow.create
+        { Shadow.I.clk = inputs.clk
+        ; rst_n = inputs.rst_n
+        ; enable = enable &: inputs.run
+        ; settle
+        ; claim
+        ; claim_pc
+        ; pins_in
+        ; pins_out
+        ; pins_oe
+        ; timestamp
+        ; full
+        }
+    in
+    push <== s.Shadow.O.push;
+    record <== s.Shadow.O.record;
+    (head, count)
+  in
+  let trace0_head, trace0_count =
+    trace
+      ~enable:(e0_shadow |: mbit Profile_table.mode_e0_check)
+      ~settle:table.Profile_table.O.e0_settle ~claim:engine_out.Engine.O.emit_claim
+      ~claim_pc:engine_out.Engine.O.claim_pc ~pins_out:engine_out.Engine.O.pins_out
+      ~pins_oe:engine_out.Engine.O.pins_oe ~pop:inputs.trace_pop0
+  in
+  let trace1_head, trace1_count =
+    trace
+      ~enable:(e1_shadow |: mbit Profile_table.mode_e1_check)
+      ~settle:table.Profile_table.O.e1_settle ~claim:protocol_out.Protocol_engine.O.emit_claim
+      ~claim_pc:protocol_out.Protocol_engine.O.claim_pc
+      ~pins_out:protocol_out.Protocol_engine.O.pins_out
+      ~pins_oe:protocol_out.Protocol_engine.O.pins_oe ~pop:inputs.trace_pop1
+  in
+
   { O.phys_pc = engine_out.Engine.O.pc
   ; phys_halted = engine_out.Engine.O.halted
   ; protocol_halted = protocol_out.Protocol_engine.O.halted
   ; phys_pins_out = engine_out.Engine.O.pins_out
-  ; phys_pins_oe = engine_out.Engine.O.pins_oe
+  ; phys_pins_oe = engine_out.Engine.O.pins_oe &: repeat (~:e0_shadow) 8
   ; protocol_pc = protocol_out.Protocol_engine.O.pc
   ; protocol_pins_out = protocol_out.Protocol_engine.O.pins_out
-  ; protocol_pins_oe = protocol_out.Protocol_engine.O.pins_oe
+  ; protocol_pins_oe = protocol_out.Protocol_engine.O.pins_oe &: repeat (~:e1_shadow) 8
   ; rx_word = protocol_out.Protocol_engine.O.rx_word
   ; fifo_full = fifo_out.Shadow_fifo.O.full
   ; fifo_empty = fifo_out.Shadow_fifo.O.empty
@@ -277,6 +339,11 @@ let create_generic ~engine_create ~protocol_create (inputs : Signal.t I.t) =
   ; rx_profile = table.Profile_table.O.rx_id
   ; tx_profile = table.Profile_table.O.tx_id
   ; loopback = table.Profile_table.O.loopback
+  ; shadow_mode = mode
+  ; trace0_head
+  ; trace0_count
+  ; trace1_head
+  ; trace1_count
   }
 
 let create (inputs : Signal.t I.t) =

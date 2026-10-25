@@ -271,6 +271,23 @@ let tt_um_dual_generic ~dual_create (inputs : Signal.t I.t) =
       }
   in
   let looped_pins = wire 8 in
+  (* Shadow trace readout (shadow.ml). After `run`, ui_in is free (it is the
+     loader's data bus only before run). With the mode byte's trace_readout
+     bit set, ui_in[7] high turns uo_out into a view of the trace FIFOs:
+       ui_in[6]   engine (0 = µE0, 1 = µE1)
+       ui_in[5:3] byte k of that engine's oldest record (byte 0 = bits 7:0)
+       ui_in[1]   status instead: {0, 0, µE1 count[2:0], µE0 count[2:0]}
+       ui_in[2]   rising edge pops the selected engine's oldest record
+     All six go through a 2-FF synchronizer first, like the loader's strobe.
+     With trace_readout clear (the default) nothing changes: uo_out is the
+     pin mirror, as every existing program expects. *)
+  let sync_spec = Reg_spec.create ~clock:inputs.clk ~clear:((~:) inputs.rst_n) () in
+  let ui = reg sync_spec (reg sync_spec inputs.ui_in) in
+  let trace_on = wire 1 in
+  let view = trace_on &: select ui 7 7 in
+  let t_engine = select ui 6 6 in
+  let pop_level = view &: select ui 2 2 in
+  let pop_edge = pop_level &: (~:(reg sync_spec pop_level)) in
   let dual_out =
     dual_create
       { Dual.I.clk = inputs.clk
@@ -288,8 +305,18 @@ let tt_um_dual_generic ~dual_create (inputs : Signal.t I.t) =
       ; cfg_we = loader_out.Dual_loader.O.cfg_we
       ; cfg_addr = loader_out.Dual_loader.O.cfg_addr
       ; cfg_data = loader_out.Dual_loader.O.cfg_data
+      ; trace_pop0 = pop_edge &: (~:t_engine)
+      ; trace_pop1 = pop_edge &: t_engine
       }
   in
+  trace_on
+  <== ((dual_out.Dual.O.shadow_mode &: of_int ~width:8 Profile_table.mode_trace_readout) <>:. 0);
+  let head = mux2 t_engine dual_out.Dual.O.trace1_head dual_out.Dual.O.trace0_head in
+  let head_byte = mux (select ui 5 3) (List.init 8 (fun k -> select head ((8 * k) + 7) (8 * k))) in
+  let status =
+    concat_msb [ zero 2; dual_out.Dual.O.trace1_count; dual_out.Dual.O.trace0_count ]
+  in
+  let trace_byte = mux2 (select ui 1 1) status head_byte in
   let combine_bit i =
     let p_oe = select dual_out.Dual.O.protocol_pins_oe i i in
     let p_out = select dual_out.Dual.O.protocol_pins_out i i in
@@ -309,7 +336,9 @@ let tt_um_dual_generic ~dual_create (inputs : Signal.t I.t) =
   let mask = dual_out.Dual.O.loopback in
   let own_level = combined_out |: (~:combined_oe) in
   looped_pins <== ((inputs.uio_in &: (~:mask)) |: (own_level &: mask));
-  { O.uo_out = mux2 loader_out.Dual_loader.O.run combined_out loader_out.Dual_loader.O.checksum
+  { O.uo_out =
+      mux2 loader_out.Dual_loader.O.run (mux2 view trace_byte combined_out)
+        loader_out.Dual_loader.O.checksum
   ; uio_out = mux2 loader_out.Dual_loader.O.run combined_out (zero 8)
   ; uio_oe = mux2 loader_out.Dual_loader.O.run (combined_oe &: (~:mask)) (zero 8)
   }
@@ -341,3 +370,4 @@ module Clock_recovery = Clock_recovery
 module Profile_table = Profile_table
 module Glitch_filter = Glitch_filter
 module Halt_guard = Halt_guard
+module Shadow = Shadow

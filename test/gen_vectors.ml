@@ -465,8 +465,40 @@ let st_protocol_prog =
       ; fifo_pop_instr (* halt *)
       ]
 
+(* ---- Shadow on-chip check (same programs and configuration as
+   test_tt_um_dual_shadow.ml). Loopback on uio pin 4; µE1 holds it high in
+   Drive; µE0 in Shadow claims high, low (wrong), high. Expected: two µE0
+   trace records, a mismatch at pc 4 and an episode end at pc 6, read back
+   through ui_in / uo_out. ---- *)
+let sh_pin = 4
+let sh_settle = 4
+
+let sh_cfg_bytes =
+  List.init Profile_table.loopback_index (fun _ -> 0)
+  @ [ 1 lsl sh_pin; Profile_table.(mode_e0_shadow lor mode_trace_readout); sh_settle; 0; sh_settle; 0 ]
+
+let sh_program =
+  let wait n = Engine.wait_edge ~pin:7 ~falling:true ~payload:n in
+  Engine.
+    [ release_pin ~pin:7 (* no-op: a timed wait cannot come first *)
+    ; wait 30
+    ; emit_state ~pin:sh_pin ~level:true
+    ; wait 20
+    ; emit_state ~pin:sh_pin ~level:false
+    ; wait 20
+    ; emit_state ~pin:sh_pin ~level:true
+    ; wait 20
+    ; wait_edge ~pin:6 ~falling:true ~payload:0
+    ]
+
+let sh_protocol_prog = Protocol_engine.[ emit_state ~pin:sh_pin ~level:true; fifo_pop_instr ]
+
 let () =
   match Array.to_list Sys.argv with
+  | [ _; "shadow" ] ->
+    Printf.printf
+      "{\n  \"prescale\": 0,\n  \"cfg\": %s,\n  \"pins\": {\"line\": %d},\n  \"phys\": %s,\n  \"protocol\": %s,\n  \"records\": [{\"end\": 0, \"pc\": 4, \"mask\": %d}, {\"end\": 1, \"pc\": 6}]\n}\n"
+      (json_list sh_cfg_bytes) sh_pin (json_list sh_program) (json_list sh_protocol_prog) (1 lsl sh_pin)
   | [ _; "eth" ] ->
     let bad = List.mapi (fun k b -> if k = 20 then b lxor 0x10 else b) eth_frame in
     Printf.printf

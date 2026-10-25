@@ -198,3 +198,13 @@
  (name test_profile_switch)
  (modules test_profile_switch)
  (libraries hardcaml tt_core))
+
+(executable
+ (name test_shadow)
+ (modules test_shadow)
+ (libraries hardcaml tt_core))
+
+(executable
+ (name test_tt_um_dual_shadow)
+ (modules test_tt_um_dual_shadow)
+ (libraries hardcaml tt_core))

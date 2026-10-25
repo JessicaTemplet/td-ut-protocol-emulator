@@ -51,6 +51,20 @@ let profile_bytes = Bitpipe.cfg_bytes
 let profile_bits = 8 * profile_bytes
 let loopback_index = profile_bytes
 
+(* Shadow mode (shadow.ml), more pin-level bytes after the loopback mask:
+   the mode byte (bit 0 / 1: µE0 / µE1 in Shadow, pads released and every
+   drive checked instead; bit 3 / 4: µE0 / µE1 check their own drives while
+   still driving; bit 2: trace readout on ui_in/uo_out, tt_core.ml), then
+   each engine's settle delay, 16 bits little-endian. *)
+let shadow_mode_index = loopback_index + 1
+let e0_settle_index = loopback_index + 2
+let e1_settle_index = loopback_index + 4
+let mode_e0_shadow = 0x01
+let mode_e1_shadow = 0x02
+let mode_trace_readout = 0x04
+let mode_e0_check = 0x08
+let mode_e1_check = 0x10
+
 (* Cycles from a pointer write (µE0's PIPE_CTRL, µE1's PROFILE) to the new
    profile reaching the pipes: the pointer register, then the registered
    profile output (registered for timing: the 4:1 x 192-bit select fed the
@@ -101,6 +115,9 @@ module O = struct
     tx_id    : 'a; [@bits 2]
     glitch_n : 'a; [@bits 4]
     loopback : 'a; [@bits 8]
+    shadow_mode : 'a; [@bits 8]
+    e0_settle : 'a; [@bits 16]
+    e1_settle : 'a; [@bits 16]
   } [@@deriving sexp_of, hardcaml]
 end
 
@@ -125,14 +142,18 @@ let create (i : Signal.t I.t) =
   let rx_id = pointer ~e0:i.e0_sel_rx ~e1:i.e1_sel_rx in
   let tx_id = pointer ~e0:i.e0_sel_tx ~e1:i.e1_sel_tx in
   let profile0 = List.hd profiles in
-  let loopback =
-    reg_fb ~enable:(one 1) spec ~width:8 ~f:(fun cur ->
-      mux2 (we &&: (addr ==:. loopback_index)) data cur)
+  let pin_byte index =
+    reg_fb ~enable:(one 1) spec ~width:8 ~f:(fun cur -> mux2 (we &&: (addr ==:. index)) data cur)
   in
+  let loopback = pin_byte loopback_index in
+  let settle index = concat_msb [ pin_byte (index + 1); pin_byte index ] in
   { O.rx_cfg = reg spec (mux rx_id profiles)
   ; tx_cfg = reg spec (mux tx_id profiles)
   ; rx_id
   ; tx_id
   ; glitch_n = select profile0 15 12
   ; loopback
+  ; shadow_mode = pin_byte shadow_mode_index
+  ; e0_settle = settle e0_settle_index
+  ; e1_settle = settle e1_settle_index
   }

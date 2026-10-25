@@ -288,6 +288,8 @@ module O = struct
     sel_rx        : 'a;
     sel_tx        : 'a;
     sel_id        : 'a; [@bits 2]
+    emit_claim    : 'a; (* registered: pins_out/pins_oe changed at the last edge (shadow.ml) *)
+    claim_pc      : 'a; [@bits 9] (* the pc of that EMIT *)
   } [@@deriving sexp_of, hardcaml]
 end
 
@@ -768,6 +770,10 @@ let create_generic ~build_instr (inputs : Signal.t I.t) =
   ; sel_rx
   ; sel_tx
   ; sel_id = select pin_sel 1 0
+  (* registered taps for Shadow (shadow.ml): it never loads `advance` beyond
+     this one flop, and adds nothing to it *)
+  ; emit_claim = reg spec (advance &&: is_emit)
+  ; claim_pc = reg spec pc
   }
 
 (* Every existing testbench calls this one -- behavioral RAM, fully

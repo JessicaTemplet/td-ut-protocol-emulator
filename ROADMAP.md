@@ -515,7 +515,30 @@ Reasons and the fallback rules are in `docs/design/design_rationale.txt`, Deviat
   into `v_wrapped >= P/4`, -4.23 ns), µE0's instruction SRAM through decode (-2.27 ns), and µE1's (-1.22 ns). The
   SRAM paths spend about 2 ns in wire buffers before their first gate: the macros sit far from the logic.
 
-## 15. Practical notes
+## 15. Shadow mode
+
+Reasons are in `docs/design/design_rationale.txt`, Deviation 14.
+
+- `shadow.ml` (new): one comparator per engine; `Shadow_fifo.create_sized` (any power-of-two depth, any width; the two
+  4 x 16 inter-engine instances are unchanged); two 4 x 64 trace FIFOs and a shared 32-bit timestamp in `dual.ml`;
+  engines export `emit_claim` (a registered copy of their emit-advance) and `claim_pc`; Shadow masks the engine's
+  output enables in `dual.ml`. Config bytes 25-29 (`profile_table.ml`): mode, µE0 settle, µE1 settle. Readout on
+  `ui_in`/`uo_out` in `tt_core.ml`, behind the mode byte's `trace_readout` bit.
+- `test_shadow` (two cores on a shared wire, Drive vs Shadow): round trip, injection with an independently computed
+  timestamp, storm, overflow and the carried drop count, µE1, check mode, and the settle boundary at exactly
+  `Dual.sync_latency`. `test_tt_um_dual_shadow`: the on-chip check through the real pins, nothing attached, records
+  read back through the readout; with `trace_readout` clear, `uo_out` is unchanged. Cocotb `shadow_self_check` replays it.
+- First run of the pin-level test: no records. Not a Shadow fault: a timed `WAIT` as a program's FIRST instruction
+  never expires, because the timer is armed by the advance into an instruction and nothing advances into pc 0. Every
+  existing program starts with something else; the Shadow test programs now start with a no-op `release_pin`. Logged
+  as a follow-up rather than fixed here (it changes the engine's reset behavior). Second run: record 2 read back with
+  its type bit clear. Also not the hardware: OCaml's native int is 63 bits, so the bench dropped bit 63 assembling the
+  record; it now reads records as `Int64`.
+- Mutation check: nine Shadow and readout faults added (compare inverted, released pins checked, no storm
+  suppression, settle off by one, drops never counted, a Shadow engine still driving, the two streams swapped on pop,
+  readout active without its mode bit, pop on the level instead of the edge).
+
+## 16. Practical notes
 
 - Dune quirk: `lib/tt_core.ml` shares its name with the library, which suppresses automatic submodule aliasing, so
   sibling modules need explicit `module X = X` lines in `tt_core.ml`.

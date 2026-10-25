@@ -543,3 +543,58 @@ slower clock changes every protocol's samples per bit and so costs a re-measurem
   appears in the docs or the write-up, even partly.
 - The clock lives in three places, changed together: `info.yaml` `clock_hz`, `src/config.json` `CLOCK_PERIOD`, and the
   `Clock(...)` period in `gl_test/test.py`.
+
+### Deviation 14: Shadow mode, the same program as a generator or a conformance checker (2026-10-25)
+
+**What it is.** Each engine can run in Drive (as before) or Shadow. In Shadow the engine runs the same program with
+the same instruction timing, but its pads are released and every drive becomes a claim that is checked against the
+wire. Something else drives the wire: the device under test, a reference device, or the other engine. A mismatch is
+logged with the program counter of the claim, the pins that disagreed, the levels the wire actually had, and a
+timestamp. So one program written to emulate one side of a protocol also verifies a real implementation of that side,
+and its mismatch log is a trace of where and when the real device diverged, for reverse engineering as much as for
+conformance. A third use falls out: check mode compares while still driving, which catches bus contention.
+
+**How it stays out of the way.** Shadow reuses the engine's own output registers as the claim: in Shadow they latch
+exactly what they latch in Drive, and `dual.ml` masks the output enables. Nothing about when an instruction executes
+depends on the mode; `advance` has no Shadow term, so Shadow(Drive(P)) gives no mismatches by construction, and the
+round-trip test checks that pcs agree on every cycle. The comparator taps a registered copy of the emit-advance, so the
+fetch loop, which is the 70 MHz critical path, gains one flop load and no logic. A full trace FIFO drops and counts and
+never stalls the engine it watches: a checker that perturbs the timing it checks defeats itself.
+
+**Decisions taken from the private spec (rev. 2), and where the built design differs.**
+- *When to compare.* The engine has no fixed sample strobe, so the compare happens `settle` cycles (a config value per
+  engine) after the most recent claim, and checks every claimed pin at once. Every claim restarts the countdown, so
+  claims made together (SPI's data and clock) are checked together. A program sets `settle` to half a bit cell. The
+  pins compared are the ones the engines see, after the synchronizer and the glitch filter, so a glitch the filter
+  rejects cannot become a false mismatch. A level change at the pad reaches the compare `Dual.sync_latency` +
+  glitch-filter-length cycles later; a test pins that boundary exactly. The timestamp is taken at the compare, and the
+  wire time of the sample is the timestamp minus those constants.
+- *One record per FIFO entry.* Rev. 2 used 16-bit words, deltas, time-extend records, lost-record markers and a
+  free-space check before multi-word pushes, all because the trace FIFO was assumed to be the 16-bit `Shadow_fifo`.
+  With 64-bit entries a record is one push and can never land partially, and every one of those mechanisms
+  disappears. The timestamp is absolute (32 bits from a counter shared by both engines and zeroed until `run`), so both
+  streams have one epoch by construction and a dropped record does not shift later times, which it would with deltas.
+  It wraps after 61 s at 70 MHz, the same bound rev. 2 accepted.
+- *Storms.* Rev. 2 left log-and-continue versus suppress-until-resync open. Built: suppress-until-clean. A mismatch
+  opens an episode and logs one record; further failing compares only count; the first clean compare logs an
+  episode-end record with that count. A design that stays wrong gives two records, not a flood that buries the first
+  divergence.
+- *µE1.* Rev. 2 gave µE1 a byte comparator. In this architecture µE1's bytes reach the wire through µE0's `EMIT_TX`,
+  whose line bits are already compared one by one, with their pc, so a byte compare would duplicate that for
+  transmitted data and have nothing to compare for received data. µE1 gets the same pin comparator for its own
+  `EMIT_STATE` pins instead.
+- *Readout.* The host reads the trace on the existing pins: after `run`, `ui_in` is unused (it is the loader's data bus
+  only before run), and with the mode byte's `trace_readout` bit set, `ui_in[7]` turns `uo_out` into a view of the
+  trace (engine, byte, status, pop on `ui_in[6:1]`). With the bit clear, nothing changes, so every existing program and
+  test behaves as before. Rev. 2 called for mirroring the loader's byte-serial protocol, and this is that.
+- *Not claimed.* A release (`release_pin`, an open-drain 1) is not a claim, since the engine would not drive it in
+  Drive either. The record names the claim that started the countdown, the last of a burst; the host finds the claim
+  on the mismatching pin by walking back from it. Capture remains the separate `CAPTURE` instruction (edge logging into
+  the main FIFO, with backpressure), not a Shadow mode.
+
+**Cost.** Two 4 x 64 trace FIFOs, the timestamp, and about 60 flops per engine. Measured in the harden.
+
+**What was verified.** See the Build log, section 15: two cores on one wire in Drive and Shadow (round trip, a single
+flipped claim with an independently computed timestamp, a storm, an overflow and the carried drop count, µE1, check
+mode, the exact settle boundary); the on-chip check through the real pins with nothing attached and the records read
+back through the readout; and nine mutants, each caught.

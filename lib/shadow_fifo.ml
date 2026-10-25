@@ -50,15 +50,21 @@ module O = struct
   } [@@deriving sexp_of, hardcaml]
 end
 
-let create (i : Signal.t I.t) =
-  let spec = Reg_spec.create ~clock:i.clk ~clear:((~:) i.rst_n) () in
+(* The FIFO at any power-of-two depth and any width. `create` below is the
+   4 x 16 instance both inter-engine FIFOs use, unchanged; Shadow's trace
+   FIFOs (shadow.ml) use 4 x 64, one trace record per entry. Also returns the
+   fill count (the trace readout reports it). *)
+let create_sized ~depth ~ptr_width ~clk ~rst_n ~push ~push_data ~pop =
+  assert (depth = 1 lsl ptr_width);
+  let width = Signal.width push_data in
+  let spec = Reg_spec.create ~clock:clk ~clear:((~:) rst_n) () in
 
-  let count = wire 3 in
+  let count = wire (ptr_width + 1) in
   let empty = count ==:. 0 in
   let full = count ==:. depth in
 
-  let do_push = i.push &&: (~:full) in
-  let do_pop = i.pop &&: (~:empty) in
+  let do_push = push &&: (~:full) in
+  let do_pop = pop &&: (~:empty) in
 
   let wr_ptr = wire ptr_width in
   let rd_ptr = wire ptr_width in
@@ -68,16 +74,22 @@ let create (i : Signal.t I.t) =
     reg_fb ~enable:(one 1) spec ~width:ptr_width ~f:(fun cur -> mux2 do_pop (cur +:. 1) cur);
 
   count <==
-    reg_fb ~enable:(one 1) spec ~width:3 ~f:(fun cur ->
+    reg_fb ~enable:(one 1) spec ~width:(ptr_width + 1) ~f:(fun cur ->
       mux2 (do_push &&: (~:do_pop)) (cur +:. 1) (mux2 (do_pop &&: (~:do_push)) (cur -:. 1) cur));
 
   (* One sticky register per slot, latched only when this push targets
      it -- same demux pattern engine.ml's pins_out/pins_oe already use. *)
   let mem_regs =
     Array.init depth (fun slot ->
-      reg_fb ~enable:(one 1) spec ~width:16 ~f:(fun cur ->
-        mux2 (do_push &&: (wr_ptr ==:. slot)) i.push_data cur))
+      reg_fb ~enable:(one 1) spec ~width ~f:(fun cur ->
+        mux2 (do_push &&: (wr_ptr ==:. slot)) push_data cur))
   in
   let pop_data = mux rd_ptr (Array.to_list mem_regs) in
+  (pop_data, empty, full, count)
 
+let create (i : Signal.t I.t) =
+  let pop_data, empty, full, _ =
+    create_sized ~depth ~ptr_width ~clk:i.clk ~rst_n:i.rst_n ~push:i.push ~push_data:i.push_data
+      ~pop:i.pop
+  in
   { O.pop_data; empty; full }
