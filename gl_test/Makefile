@@ -29,8 +29,9 @@ SIM_BUILD = sim_build/rtl
 VERILOG_SOURCES += $(SRC_DIR)/tt_um_dual.v
 else
 # Copy the hardened netlist here first, e.g.
-#   cp ../runs/wokwi/final/pnl/tt_um_dual.pnl.v gate_level_netlist.v
-# (CI's gl_test does the equivalent from the tt_submission artifact.)
+#   cp ../tt_submission/tt_um_dual.v gate_level_netlist.v
+# (what CI's gl_test uses too). Not runs/wokwi/final/pnl/*.pnl.v: that one
+# has VDD/VSS pins on every cell, which these std-cell models do not declare.
 SIM_BUILD = sim_build/gl
 COMPILE_ARGS += -DGL_TEST
 VERILOG_SOURCES += $(CMOS5L)/sg13cmos5l_io/verilog/sg13cmos5l_io.v

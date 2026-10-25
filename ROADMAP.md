@@ -550,7 +550,17 @@ Reasons are in `docs/design/design_rationale.txt`, Deviation 14.
   stops the flow before the submission files.
 - Ethernet at 6 clocks a bit (added to `test_ethernet` for the decision, then dropped): reliable to +-0.5 cycle (8.3 ns),
   2 to 3 frames of 3 at 0.75; 50 MHz is reliable to 10 ns. No protocol reason for 60.
-- Chosen: 50 MHz, with two margin changes: FIFO data slots without reset, recovery period select registered.
+- Chosen: 50 MHz, with two margin changes: FIFO data slots without reset, recovery period select registered. The
+  first regression after them failed one check, cocotb `shadow_self_check`: reading the trace view after the last pop
+  showed an empty FIFO's never-written head slot, X in simulation without the reset. The view now reads 0 while the
+  selected FIFO is empty.
+- **50 MHz harden (`72b9090`): closed.** Setup WNS slow +1.49 ns, typical +8.28, fast +12.20; hold slow +0.60,
+  typical +0.27, fast +0.09; no violations at any corner; LVS, Magic DRC, route DRC and antenna 0; no slew, cap or
+  fanout violations. 24,159 standard cells (6,701 repair buffers), 2,409 flops, 43% utilization. The Magic M2.f error of
+  the second 60 MHz run did not recur. TT precheck: pass (0 errors, 33 checks). Gate-level cocotb on
+  `tt_submission/tt_um_dual.v` at 50 MHz: 9 of 9, `shadow_self_check` included. (`gl_test/Makefile` pointed at the
+  powered `pnl` netlist, whose cells carry VDD/VSS pins the std-cell models do not declare; it now names the
+  submission netlist, the one CI uses.)
 
 ## 17. Practical notes
 
