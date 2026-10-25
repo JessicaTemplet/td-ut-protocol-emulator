@@ -78,10 +78,15 @@ let create_sized ~depth ~ptr_width ~clk ~rst_n ~push ~push_data ~pop =
       mux2 (do_push &&: (~:do_pop)) (cur +:. 1) (mux2 (do_pop &&: (~:do_push)) (cur -:. 1) cur));
 
   (* One sticky register per slot, latched only when this push targets
-     it -- same demux pattern engine.ml's pins_out/pins_oe already use. *)
+     it -- same demux pattern engine.ml's pins_out/pins_oe already use.
+     The slots have no reset: a slot is only ever read after a push wrote
+     it (count, the pointers and so `empty` do reset), so clearing them buys
+     nothing and costs a gate and a reset load per bit (on this flow a clear
+     is synchronous logic in front of the flop). *)
+  let data_spec = Reg_spec.create ~clock:clk () in
   let mem_regs =
     Array.init depth (fun slot ->
-      reg_fb ~enable:(one 1) spec ~width ~f:(fun cur ->
+      reg_fb ~enable:(one 1) data_spec ~width ~f:(fun cur ->
         mux2 (do_push &&: (wr_ptr ==:. slot)) push_data cur))
   in
   let pop_data = mux rd_ptr (Array.to_list mem_regs) in

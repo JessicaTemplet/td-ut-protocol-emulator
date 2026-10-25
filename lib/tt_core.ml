@@ -312,7 +312,15 @@ let tt_um_dual_generic ~dual_create (inputs : Signal.t I.t) =
   trace_on
   <== ((dual_out.Dual.O.shadow_mode &: of_int ~width:8 Profile_table.mode_trace_readout) <>:. 0);
   let head = mux2 t_engine dual_out.Dual.O.trace1_head dual_out.Dual.O.trace0_head in
-  let head_byte = mux (select ui 5 3) (List.init 8 (fun k -> select head ((8 * k) + 7) (8 * k))) in
+  (* an empty FIFO's head slot was never written (the slots have no reset),
+     so the view reads 0 then rather than whatever the slot powered up as *)
+  let empty =
+    mux2 t_engine dual_out.Dual.O.trace1_count dual_out.Dual.O.trace0_count ==:. 0
+  in
+  let head_byte =
+    mux (select ui 5 3) (List.init 8 (fun k -> select head ((8 * k) + 7) (8 * k)))
+    &: repeat (~:empty) 8
+  in
   let status =
     concat_msb [ zero 2; dual_out.Dual.O.trace1_count; dual_out.Dual.O.trace0_count ]
   in

@@ -203,7 +203,7 @@ headroom is about 4x.
   needs the output shift-register opcode noted in `ROADMAP.md`.
 - No per-edge resynchronisation. Sampling free-runs from the SYNC edge on a timer, so the test bit period is an exact integer
   number of clocks (32 cycles per bit, i.e. USB low speed at a 48 MHz clock); a real 1.5% tolerant link at 50 MHz would need a
-  resync feature.
+  resync feature. [Since built: bit-clock recovery, Deviation 9, tracks a sender 1.5% off.]
 - Not a USB device: no handshake transmission, no token decoding, no D+/D- level handling.
 - The CAN configuration is proven on the bit pipe with generated frames, not yet as a full dual-engine program through the pins.
 - The blueprint's second glitch stage, windowed interval validation (rejecting edge-to-edge gaps below a minimum), is not built.
@@ -543,6 +543,24 @@ slower clock changes every protocol's samples per bit and so costs a re-measurem
   appears in the docs or the write-up, even partly.
 - The clock lives in three places, changed together: `info.yaml` `clock_hz`, `src/config.json` `CLOCK_PERIOD`, and the
   `Clock(...)` period in `gl_test/test.py`.
+
+**How the ladder came out: 50 MHz.**
+- 70 MHz (before Shadow): typical +2.59 ns, fast +6.56 ns, slow **-4.23 ns**. Worst paths: the recovery's Manchester
+  frame-end check (then cut, bit-exact) and both instruction SRAMs through decode (-2.27 / -1.22 ns, about 2 ns of it
+  wire from the macro row).
+- 60 MHz (with Shadow): first run slow -5.42 ns on one path, the recovery's period update (then cut, bit-exact);
+  second run slow **-2.73 ns** on the recovery's phase update itself, with the SRAM paths passing. That loop
+  (configured period, error magnitude, shifted correction, wrap decision, phase register) is a true feedback loop: it
+  cannot take a pipeline register without changing how the receiver tracks, and the parallel-compare cuts had already
+  taken what could be taken without changing it. Closing 60 would have meant redesigning the loop to update over two
+  cycles, putting the measured USB and Ethernet tolerances at risk, which is exactly what these rules exist to avoid.
+- 50 MHz: chosen. Nothing claimed needs more (Ethernet at 5 clocks a bit and USB low speed at 33 were both measured at
+  50 MHz on this RTL), and every USB vector was already timed for it. Two margin changes went with it: the FIFO data
+  slots lost their reset (`shadow_fifo.ml`; contents are never read before a push writes them), and the recovery's
+  period select is registered from the learned estimate's next value (`clock_recovery.ml`; identical except for one
+  cycle after the profile itself changes).
+- Ethernet at 6 clocks a bit was measured too, to decide: reliable to +-0.5 cycle (8.3 ns), so no better than 50 MHz's
+  10 ns. 60 MHz would have bought timing risk and USB re-timing for no protocol gain.
 
 ### Deviation 14: Shadow mode, the same program as a generator or a conformance checker (2026-10-25)
 

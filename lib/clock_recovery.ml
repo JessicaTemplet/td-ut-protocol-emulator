@@ -126,8 +126,15 @@ let create (i : Signal.t I.t) =
   let one_cycle = of_int ~width:w (1 lsl frac_bits) in
   let p_cfg = uresize c.rec_period w in
   (* the period in use: the configured one, or the learned estimate *)
-  let p_est = wire w in
-  let p = mux2 c.rec_freq_en p_est p_cfg in
+  let p_est_d = wire w in
+  let p_est = reg spec p_est_d in
+  (* Registered, from the learned estimate's NEXT value, so p equals
+     mux2 rec_freq_en p_est p_cfg on every cycle without the select (whose
+     config bit fans out across the whole phase loop) in front of it. The
+     one difference: when the profile itself changes (a switch or a CFG_WR),
+     p follows one cycle later, so one phase step uses the old period
+     (timing: the 50 MHz margin's worst path started at that select). *)
+  let p = reg spec (mux2 c.rec_freq_en p_est_d p_cfg) in
   let half = srl p 1 in
 
   let line = mux c.rec_pin (List.init 8 (fun k -> select i.pins_in k k)) in
@@ -264,8 +271,8 @@ let create (i : Signal.t I.t) =
      including its one wrap: cur - sm below zero reads, unsigned, as a huge
      value, which is not below p_lo and is above p_hi. *)
   let sm = mux c.rec_fshift (List.init 8 (fun s -> srl mag s)) in
-  p_est
-  <== reg_fb ~enable:(one 1) spec ~width:w ~f:(fun cur ->
+  p_est_d
+  <== (let cur = p_est in
         let s v = sresize v (w + 2) in
         let sms = s sm and cs = s cur and lo_s = s p_lo and hi_s = s p_hi in
         let up_lo = sms <+ (lo_s -: cs) and up_hi = sms >+ (hi_s -: cs) in

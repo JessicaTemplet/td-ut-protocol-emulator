@@ -538,7 +538,21 @@ Reasons are in `docs/design/design_rationale.txt`, Deviation 14.
   suppression, settle off by one, drops never counted, a Shadow engine still driving, the two streams swapped on pop,
   readout active without its mode bit, pop on the level instead of the edge).
 
-## 16. Practical notes
+## 16. Clock: 60 MHz tried, 50 MHz chosen
+
+- 60 MHz harden 1 (Shadow included): DRC/LVS/antenna clean, hold met everywhere (fast +0.08 ns), typical +2.71 ns, fast
+  +7.46 ns, slow **-5.42 ns** on one startpoint (a recovery config bit) into the learned period's update. The SRAM
+  fetch paths passed. 24,936 cells (7,009 repair buffers), 43% utilization: Shadow added about 7,200 cells and 730 flops.
+- Cut G (bit-exact): the period update's sum and difference in parallel, the clamp compares rewritten as the step
+  against bounds independent of it. Recovery, Ethernet, link-health and USB transaction suites unchanged.
+- 60 MHz harden 2: slow **-2.73 ns** (27 endpoints) on the phase update itself, typical +4.33, fast +8.58, hold +0.11
+  fast; plus one Magic DRC error (Metal2 wide spacing, M2.f, 0.2 um wide just right of `mue0_instr_lo`'s edge), which
+  stops the flow before the submission files.
+- Ethernet at 6 clocks a bit (added to `test_ethernet` for the decision, then dropped): reliable to +-0.5 cycle (8.3 ns),
+  2 to 3 frames of 3 at 0.75; 50 MHz is reliable to 10 ns. No protocol reason for 60.
+- Chosen: 50 MHz, with two margin changes: FIFO data slots without reset, recovery period select registered.
+
+## 17. Practical notes
 
 - Dune quirk: `lib/tt_core.ml` shares its name with the library, which suppresses automatic submodule aliasing, so
   sibling modules need explicit `module X = X` lines in `tt_core.ml`.
