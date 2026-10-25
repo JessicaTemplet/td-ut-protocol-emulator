@@ -7,6 +7,8 @@
   "//tmpl0": "-- Baseline tunables adopted from TinyTapeout/ttihp-verilog-template@cmos5l's src/config.json (the project's own maintained default for this PDK), not re-derived from the old sg13g2 config -- this PDK may need different defaults than sg13g2 did and there's no reason to guess when the vendor's own template states them directly.",
   "PL_TARGET_DENSITY_PCT": 60,
   "PL_RESIZER_HOLD_SLACK_MARGIN": 0.1,
+  "//pnr": "PNR_CORNERS: LibreLane's default (null) runs the place-and-route resizer against DEFAULT_CORNER only, the typical corner. The 70 MHz attempt showed the cost: post-CTS repair drove typical to exactly 0 ns while the slow corner, never optimized, finished at -13 ns. Listing all three STA corners makes setup repair see the slow corner and hold repair the fast one.",
+  "PNR_CORNERS": ["nom_fast_1p32V_m40C", "nom_slow_1p08V_125C", "nom_typ_1p20V_25C"],
   "//hold": "GRT hold margin raised from the template's 0.05 to 0.1: the 50 MHz harden finished with hold WNS +0.057 ns at the fast corner (flop -> SRAM A_ADDR, and the macro's fast lib is characterized at -55C, not the -40C corner), so a re-placement could tip it negative.",
   "GRT_RESIZER_HOLD_SLACK_MARGIN": 0.1,
   "RUN_LINTER": 1,

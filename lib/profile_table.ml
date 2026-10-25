@@ -25,7 +25,8 @@ open Signal
    Two write ports, which never collide in practice: the loader's
    (pre-run only) and µE1's CFG_WR (post-run only). If both fire in the
    same cycle µE1 wins, the same "protocol layer wins" rule tt_core.ml
-   uses for pins. A write takes effect the next cycle.
+   uses for pins. A write reaches the pipes two cycles later (the byte
+   register, then the registered profile output).
 
    Pointer writes come from µE0 (PIPE_CTRL) and µE1 (PROFILE). Same
    rule: on a same-cycle conflict for one direction, µE1 wins.
@@ -49,6 +50,29 @@ let index_width = 7
 let profile_bytes = Bitpipe.cfg_bytes
 let profile_bits = 8 * profile_bytes
 let loopback_index = profile_bytes
+
+(* Cycles from a pointer write (µE0's PIPE_CTRL, µE1's PROFILE) to the new
+   profile reaching the pipes: the pointer register, then the registered
+   profile output (registered for timing: the 4:1 x 192-bit select fed the
+   clock recovery's arithmetic and the CRC in the same cycle). A control
+   that has to act on the NEW profile, such as a CRC reload, a stream reset
+   or the NRZI idle level, is delayed by exactly this much (`after_select`). *)
+let select_latency = 2
+
+let after_select spec s =
+  let rec go n s = if n = 0 then s else go (n - 1) (Signal.reg spec s) in
+  go select_latency s
+
+(* High for the select_latency cycles after a pointer write: the cycles on
+   which the pipes still see the old profile, and the cycle on which a
+   control delayed by `after_select` (a stream reset, a CRC reload) lands.
+   µE0 holds any pipe instruction while it is high, so a PIPE_BIT or EMIT_TX
+   issued right after a switch runs on the new profile and after the reset,
+   never before or into it: instruction order, not cycle count, decides. *)
+let settling spec sel =
+  let rec go n s acc = if n = 0 then acc else
+      let s = Signal.reg spec s in go (n - 1) s Signal.(acc |: s) in
+  go select_latency sel Signal.gnd
 
 module I = struct
   type 'a t = {
@@ -105,8 +129,8 @@ let create (i : Signal.t I.t) =
     reg_fb ~enable:(one 1) spec ~width:8 ~f:(fun cur ->
       mux2 (we &&: (addr ==:. loopback_index)) data cur)
   in
-  { O.rx_cfg = mux rx_id profiles
-  ; tx_cfg = mux tx_id profiles
+  { O.rx_cfg = reg spec (mux rx_id profiles)
+  ; tx_cfg = reg spec (mux tx_id profiles)
   ; rx_id
   ; tx_id
   ; glitch_n = select profile0 15 12

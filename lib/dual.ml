@@ -200,6 +200,9 @@ let create_generic ~engine_create ~protocol_create (inputs : Signal.t I.t) =
       ; tx_fifo_data = tx_fifo.Shadow_fifo.O.pop_data
       ; tx_fifo_empty = tx_fifo.Shadow_fifo.O.empty
       ; ext_rx_crc_init = protocol_crc_init
+      ; profile_settling =
+          Profile_table.settling sync_spec
+            (e0_sel_rx |: e0_sel_tx |: e1_sel_rx |: e1_sel_tx)
       ; prescale = inputs.prescale
       ; run = inputs.run
       ; write_enable = inputs.phys_write_enable

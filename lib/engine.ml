@@ -268,6 +268,7 @@ module I = struct
     tx_fifo_data : 'a; [@bits 16]
     tx_fifo_empty : 'a;
     ext_rx_crc_init : 'a;
+    profile_settling : 'a; (* a profile switch has not reached the pipes yet *)
   } [@@deriving sexp_of, hardcaml]
 end
 
@@ -551,9 +552,12 @@ let create_generic ~build_instr (inputs : Signal.t I.t) =
   let selecting = pbit 5 |: pbit 6 in
   let now_or_later s =
     let s_now = ctrl &&: s in
-    mux2 selecting gnd s_now |: reg spec (s_now &&: selecting)
+    mux2 selecting gnd s_now |: Profile_table.after_select spec (s_now &&: selecting)
   in
-  let prev_level = mux2 (reg spec (ctrl &&: selecting)) (reg spec (pbit 1)) (pbit 1) in
+  let prev_level =
+    mux2 (Profile_table.after_select spec (ctrl &&: selecting))
+      (Profile_table.after_select spec (pbit 1)) (pbit 1)
+  in
   (* PIPE_BIT payload[0] = sync: wait for the clock-recovery sample strobe
      first; payload[1] = nostep: only wait, do not step the pipe (a USB loop
      checks for SE0 between the strobe and the step) *)
@@ -611,6 +615,7 @@ let create_generic ~build_instr (inputs : Signal.t I.t) =
   let shift_advance_ok =
     ~:((would_push &&: inputs.push_stall)
        |: (is_emit_tx &&: tx.Txpipe.O.would_stall)
+       |: (inputs.profile_settling &&: ((is_shift &&: mode) |: is_emit_tx))
        |: (bit_sync &&: (~:(rec_.Clock_recovery.O.pending)))
        |: (is_pipe_status &&: rec_.Clock_recovery.O.margin_busy)
        |: (is_run &&: (~:(rec_.Clock_recovery.O.frame_end))))

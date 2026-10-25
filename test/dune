@@ -193,3 +193,8 @@
  (name test_tt_um_dual_selftest)
  (modules test_tt_um_dual_selftest)
  (libraries hardcaml tt_core))
+
+(executable
+ (name test_profile_switch)
+ (modules test_profile_switch)
+ (libraries hardcaml tt_core))

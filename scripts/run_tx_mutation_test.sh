@@ -1,6 +1,7 @@
 #!/bin/bash
 # Mutation check for the transmit path, the profile table, the input
-# synchronizer, the halt guard and the loopback self-test. Each entry
+# synchronizer, the halt guard, the loopback self-test and the profile-switch
+# alignment. Each entry
 # below injects one deliberate hardware fault into a scratch copy of the
 # sources; the transmit and profile tests (test_txpipe, test_dual_tx,
 # test_usb_transaction) must FAIL on every one. A mutation that survives is
@@ -24,7 +25,7 @@ eval "$(opam env --switch=hardcaml-env)"
 WORK=$(mktemp -d "$HOME/.tx-mutation.XXXXXX")
 trap 'rm -rf "$WORK"' EXIT
 
-TESTS="test_txpipe test_dual_tx test_usb_transaction test_clock_recovery test_usb_rx_recovery test_link_health test_ethernet test_dual test_halt_guard test_tt_um_dual_selftest"
+TESTS="test_txpipe test_dual_tx test_usb_transaction test_clock_recovery test_usb_rx_recovery test_link_health test_ethernet test_dual test_halt_guard test_tt_um_dual_selftest test_profile_switch"
 
 # name # file # text to find (must occur exactly once) # replacement
 MUTATIONS=(
@@ -36,15 +37,15 @@ MUTATIONS=(
   "wrong CRC polynomial in BOTH directions#lib/bitpipe.ml#poly = concat_msb [ word16 9; word16 3 ]#poly = concat_msb [ word16 9; word16 3 ] ^: of_int ~width:32 2"
   "TX FIFO pops twice (drops a byte)#lib/dual.ml#tx_pop <== engine_out.Engine.O.tx_fifo_pop;#tx_pop <== (engine_out.Engine.O.tx_fifo_pop |: reg (Reg_spec.create ~clock:inputs.clk ()) engine_out.Engine.O.tx_fifo_pop);"
   "differential pair not complemented#lib/engine.ml#(mux2 (pair_hit i) (~:(tx.Txpipe.O.line)) cur)#(mux2 (pair_hit i) tx.Txpipe.O.line cur)"
-  "TX profile pointer ignored#lib/profile_table.ml#; tx_cfg = mux tx_id profiles#; tx_cfg = List.hd profiles"
-  "RX profile pointer ignored#lib/profile_table.ml#{ O.rx_cfg = mux rx_id profiles#{ O.rx_cfg = List.hd profiles"
-  "PROFILE does not reload the RX CRC#lib/protocol_engine.ml#; rx_crc_init = reg spec (do_profile &&: pbit 4)#; rx_crc_init = gnd"
+  "TX profile pointer ignored#lib/profile_table.ml#; tx_cfg = reg spec (mux tx_id profiles)#; tx_cfg = reg spec (List.hd profiles)"
+  "RX profile pointer ignored#lib/profile_table.ml#{ O.rx_cfg = reg spec (mux rx_id profiles)#{ O.rx_cfg = reg spec (List.hd profiles)"
+  "PROFILE does not reload the RX CRC#lib/protocol_engine.ml#; rx_crc_init = Profile_table.after_select spec (do_profile &&: pbit 4)#; rx_crc_init = gnd"
   "CFG_WR writes nothing#lib/protocol_engine.ml#; cfg_we = advance &&: is_cfg_wr#; cfg_we = gnd"
   "timer expires on a load cycle (old bug)#lib/timer.ml#main_zero &&: (~:(inputs.load))#main_zero"
-  "recovery: phase correction sign flipped#lib/clock_recovery.ml#let v = phw +: one_cycle -: corr in#let v = phw +: one_cycle +: corr in"
+  "recovery: phase correction sign flipped#lib/clock_recovery.ml#let v_wrapped = mux2 accept (mux2 neg up down) stay in#let v_wrapped = mux2 accept (mux2 neg down up) stay in"
   "recovery: acceptance window ignored#lib/clock_recovery.ml#((c.rec_window ==:. 0) |: (mag <=: window))#vdd"
   "recovery: period learning sign flipped#lib/clock_recovery.ml#let next = cur +: fstep in#let next = cur -: fstep in"
-  "recovery: strobe at the boundary, not mid-bit#lib/clock_recovery.ml#&&: (phw <: half) &&: (v_wrapped >=: half)#&&: (v >=: p)"
+  "recovery: strobe at the boundary, not mid-bit#lib/clock_recovery.ml#&&: (phw <: half) &&: (v_wrapped >=: half)#&&: (v_wrapped <: phw)"
   "PIPE_BIT sync does not wait for the strobe#lib/engine.ml#       |: (bit_sync &&: (~:(rec_.Clock_recovery.O.pending)))#"
   "margin keeps the last edge, not the worst#lib/clock_recovery.ml#let bigger = measured &&: (mag >: worst) in#let bigger = measured in"
   "margin scaled by 32, not 64#lib/clock_recovery.ml#(sll (uresize worst dw) 6)#(sll (uresize worst dw) 5)"
@@ -63,6 +64,8 @@ MUTATIONS=(
   "loopback mask ignored (engines read the pad)#lib/tt_core.ml#  looped_pins <== ((inputs.uio_in &: (~:mask)) |: (own_level &: mask));#  looped_pins <== inputs.uio_in;"
   "masked pad still driven#lib/tt_core.ml#(combined_oe &: (~:mask))#combined_oe"
   "loopback mask never written#lib/profile_table.ml#mux2 (we &&: (addr ==:. loopback_index)) data cur#cur"
+  "profile switch: controls act one cycle early (CRC reload on the old profile)#lib/profile_table.ml#let select_latency = 2#let select_latency = 1"
+  "profile switch: no interlock (a pipe instruction runs before the switch lands)#lib/profile_table.ml#  go select_latency sel Signal.gnd#  ignore (go select_latency sel Signal.gnd); Signal.gnd"
 )
 
 caught=0

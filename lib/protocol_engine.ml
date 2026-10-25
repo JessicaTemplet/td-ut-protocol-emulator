@@ -284,7 +284,7 @@ let create_generic ~build_instr (inputs : Signal.t I.t) =
   ; sel_rx = do_profile &&: pbit 2
   ; sel_tx = do_profile &&: pbit 3
   ; sel_id = select payload 1 0
-  ; rx_crc_init = reg spec (do_profile &&: pbit 4)
+  ; rx_crc_init = Profile_table.after_select spec (do_profile &&: pbit 4)
   }
 
 let create (inputs : Signal.t I.t) = create_generic ~build_instr:behavioral_ram inputs

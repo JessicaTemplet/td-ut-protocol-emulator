@@ -111,8 +111,16 @@ module O = struct
   } [@@deriving sexp_of, hardcaml]
 end
 
+(* `bit_valid` and `bit_value` leave through this many registers (timing:
+   they gate µE0's advance). Fixed, so a bit's place on the wire is its
+   decode cycle minus this, for anything that timestamps or compares it. *)
+let bit_output_latency = 1
+
 let create (i : Signal.t I.t) =
   let spec = Reg_spec.create ~clock:i.clk ~clear:((~:) i.rst_n) () in
+  let output_reg s =
+    let rec go n s = if n = 0 then s else go (n - 1) (reg spec s) in
+    go bit_output_latency s in
   let c = Bitpipe.decode_cfg i.cfg in
   let w = ph_width + 1 in (* signed working width *)
   let one_cycle = of_int ~width:w (1 lsl frac_bits) in
@@ -132,8 +140,12 @@ let create (i : Signal.t I.t) =
 
   (* signed error, folded into (-P/2, P/2] *)
   let error = mux2 (phw <: half) phw (phw -: p) in
-  let neg = msb error in
-  let mag = mux2 neg (negate error) error in
+  let low = phw <: half in
+  let below_p = phw <: p in
+  (* sign and magnitude of `error`, computed in parallel rather than as a
+     negate after the subtract (timing: this sits in the phase loop) *)
+  let neg = (~:low) &&: below_p in
+  let mag = mux2 low phw (mux2 below_p (p -: phw) (phw -: p)) in
   let window = concat_msb [ zero (w - 8 - frac_bits); c.rec_window; zero frac_bits ] in
   (* Manchester: a mid-bit edge is expected at error 0 and a cell boundary at
      P/2, so the best classifier is the midpoint, P/4, at full fixed-point
@@ -153,14 +165,27 @@ let create (i : Signal.t I.t) =
      the learned period ends 0.02 cycle lower with the plain shift), so
      this is the symmetric choice rather than a fix for a visible fault. *)
   let shift_toward_zero s = mux2 neg (negate (srl mag s)) (srl mag s) in
-  let shifted = mux c.rec_gain (List.init 8 shift_toward_zero) in
+  let shifted_mag = mux c.rec_gain (List.init 8 (fun s -> srl mag s)) in
 
   let manch = c.manchester in
   let running = c.rec_en &&: (~:armed) in
   let accept = running &&: edge &&: within in
-  let corr = mux2 accept shifted (zero w) in
-  let v = phw +: one_cycle -: corr in
-  let v_wrapped = mux2 (v >=: p) (v -: p) v in
+  (* v = phw + 1 - corr (corr = +-shifted_mag when an edge is accepted),
+     wrapped into [0, p). Computed as three candidates whose wrap is decided
+     in parallel with their sums rather than after them: this is the phase
+     loop's critical path. All values are below 2^(w-1), so msb is the sign
+     and no sum overflows. With r = p - (phw + 1) and d = -r:
+       phw + 1 + m >= p  <=>  m >= r,  wrapped = m - r
+       phw + 1 - m >= p  <=>  d >= m,  wrapped = d - m
+       phw + 1     >= p  <=>  d >= 0,  wrapped = d *)
+  let phw1 = phw +: one_cycle in
+  let m = shifted_mag in
+  let r = p -: phw1 in
+  let d = phw1 -: p in
+  let up = mux2 ((msb r) |: (m >=: r)) (m -: r) (phw1 +: m) in
+  let down = mux2 ((~:(msb d)) &&: (d >=: m)) (d -: m) (phw1 -: m) in
+  let stay = mux2 (~:(msb d)) d phw1 in
+  let v_wrapped = mux2 accept (mux2 neg up down) stay in
   let strobe = running &&: (~:manch) &&: (phw <: half) &&: (v_wrapped >=: half) in
   (* the edge that ends `armed`: any edge, or in Manchester mode a rising one *)
   let snap = armed &&: edge &&: ((~:manch) |: line) in
@@ -275,8 +300,8 @@ let create (i : Signal.t I.t) =
   ; armed
   ; period = p
   ; margin
-  ; margin_busy = bigger |: start |: busy
-  ; bit_valid
-  ; bit_value = held_value
+  ; margin_busy = (running &&: edge) |: start |: busy
+  ; bit_valid = output_reg bit_valid
+  ; bit_value = output_reg held_value
   ; frame_end
   }

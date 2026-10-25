@@ -89,6 +89,7 @@ let create_generic ~engine_create (inputs : Signal.t I.t) =
       ; tx_fifo_data = zero 16
       ; tx_fifo_empty = vdd
       ; ext_rx_crc_init = gnd
+      ; profile_settling = gnd
       }
   in
   { O.sample_pulse = engine_out.Engine.O.sample_pulse
