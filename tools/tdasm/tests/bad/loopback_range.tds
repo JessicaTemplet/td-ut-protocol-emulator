@@ -1,0 +1,4 @@
+.prescale 0
+.loopback 256
+.phys
+  halt

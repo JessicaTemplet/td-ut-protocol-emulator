@@ -1,0 +1,57 @@
+; On-chip loopback self-test: nothing needs to be attached to the chip.
+; The loopback mask makes uio pin 0 read the chip's own output, and its
+; pad is never driven. uE1 pushes a USB DATA0 packet; uE0 sends each
+; line bit through the transmit pipe (NRZI, stuffing, CRC16 appended)
+; and samples it straight back through the receive pipe; uE1 checks the
+; status word (CRC good, no stuffing error, byte aligned, 6 bytes) and
+; raises PASS. Same program and configuration as gen_vectors.ml's
+; st_program / st_protocol_prog / st_cfg_bytes, prescale 0.
+;   uio pins: 0 the looped line, 4 PASS, 5 DONE (DONE without PASS: fail)
+
+.prescale 0
+
+; Profile 0: the USB low-speed profile usb_tx.tds uses, read by both pipes.
+.cfg 0x9B           ; NRZI, stuffing, CRC, reflected, LSB first, CRC sent complemented
+.cfg 0x06           ; stuff after 6 ones, glitch filter off
+.cfg 0x2F           ; CRC width 16, CRC skips 2 bytes (SYNC + PID)
+.cfg 0x01 0xA0      ; CRC16 polynomial, reflected (0xA001)
+.cfg 0xFF 0xFF      ; CRC init 0xFFFF
+.cfg 0x01 0xB0      ; good-packet residue 0xB001
+
+.loopback 0x01      ; config index 24: pin 0 reads its own output
+
+.phys
+        pipe_ctrl reset idle_high tx_reset  ; both pipes, idle line is J
+        emit 0 1                        ; J
+        wait_fall 7 8
+data:   emit_tx 0                       ; next line bit
+        wait_fall 7 4                   ; output register + 2-FF synchronizer + margin
+        pipe_bit 0                      ; sample it back
+        br_flag tx_more data
+        pipe_ctrl tx_crc                ; switch the bit source to the CRC
+crc:    emit_tx 0
+        wait_fall 7 4
+        pipe_bit 0
+        br_flag tx_more crc
+        pipe_status                     ; verdict word to uE1
+        release 0
+        halt
+
+.protocol
+        tx_push 0x80                    ; SYNC
+        tx_push 0xC3                    ; DATA0
+        tx_push 0xFF                    ; two all-ones bytes: stuffing
+        tx_push 0xFF last
+next:   pop
+        br_bit1 15 status               ; the status word
+        br_bit0 15 next                 ; a data byte: next
+status: br_bit0 0 fail                  ; crc_ok
+        br_bit1 1 fail                  ; stuff_err
+        br_bit0 2 fail                  ; aligned
+        br_bit1 8 fail                  ; bytes = 6 = 0b0000110
+        br_bit0 9 fail
+        br_bit0 10 fail
+        br_bit1 11 fail
+        emit 4 1                        ; PASS
+fail:   emit 5 1                        ; DONE
+        pop                             ; nothing more to do: wait forever

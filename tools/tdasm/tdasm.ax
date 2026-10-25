@@ -47,6 +47,12 @@
 (fn (profStride)
   32)
 
+; Profile_table.loopback_index: the pin-level loopback mask sits right
+; after profile 0's bytes, in the padding of its 32-byte slot.
+(:: loopbackIndex Int)
+(fn (loopbackIndex)
+  24)
+
 ; Section numbers. 0 is "before any .phys/.protocol line".
 (:: sectNone Int)
 (fn (sectNone)
@@ -71,6 +77,8 @@
   (mut sect : Int)
   (mut prescale : Int)
   (mut prescaleSet : Bool)
+  (mut loopback : Int)
+  (mut loopbackSet : Bool)
   (cfg : (Vec Int))
   (p0 : (Vec Int))
   (p1 : (Vec Int))
@@ -89,6 +97,8 @@
   (Asm
     0
     0
+    0
+    false
     0
     false
     vecNew
@@ -872,13 +882,25 @@
         0)
     }))
 
+; Padding byte at index i of profile p's slot: the loopback mask at
+; index 24 of profile 0 when `.loopback` was given, 0 otherwise.
+(:: padByte (-> Asm Int Int Int))
+(fn (padByte a p i)
+  (if (&& a.loopbackSet (&& (== p 0) (== i (loopbackIndex))))
+    a.loopback
+    0))
+
 ; The bytes the loader streams with cfg_sel: its index auto-increments
 ; from 0, so every profile up to the last one used is sent, each padded
-; to the 32-byte stride but the last.
+; to the 32-byte stride but the last. With `.loopback`, profile 0 counts
+; as used and the mask is index 24: a padding byte when later profiles
+; follow, else profile 0 is padded to 24 bytes and the mask sent last.
 (:: flattenCfg (-> Asm Int))
 (fn (flattenCfg a)
   (let (
-    (mut last (- 0 1))
+    (mut last (if a.loopbackSet
+      0
+      (- 0 1)))
     (mut p 0)
   )
     {
@@ -908,9 +930,19 @@
               {
                 (while (< i (profStride))
                   {
+                    (vecPush a.cfg (padByte a p i))
+                    (set i (+ i 1))
+                  })
+                0
+              }
+              (&& a.loopbackSet (== p 0))
+              {
+                (while (< i (loopbackIndex))
+                  {
                     (vecPush a.cfg 0)
                     (set i (+ i 1))
                   })
+                (vecPush a.cfg a.loopback)
                 0
               }
               0)
@@ -1007,6 +1039,23 @@
                       (strEq m ".cfg")
                       (if (== pass 1)
                         (cfgBytes a ln ts 1 0)
+                        0)
+                      (strEq m ".loopback")
+                      (if (== pass 1)
+                        {
+                          (if a.loopbackSet
+                            (report a ln ".loopback given twice")
+                            0)
+                          (set a.loopback (operand
+                            a
+                            ln
+                            ts
+                            1
+                            "loopback mask"
+                            255))
+                          (set a.loopbackSet true)
+                          (arity a ln ts 1)
+                        }
                         0)
                       (strEq m ".profile")
                       (if (== pass 1)

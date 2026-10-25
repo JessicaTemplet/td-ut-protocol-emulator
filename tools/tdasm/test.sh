@@ -22,7 +22,7 @@ fields() {  # print prescale, cfg, phys, protocol of a vectors JSON, one per lin
   python3 -c 'import json,sys; v=json.load(open(sys.argv[1]))
 for k in ("prescale","cfg","phys","protocol"): print(k, v.get(k, []))' "$1"
 }
-for pair in spi_master:spi i2c_master_read:i2c usb_rx:usb usb_tx:usb_tx usb_rx_rec:usb_rec eth_rx:eth; do
+for pair in spi_master:spi i2c_master_read:i2c usb_rx:usb usb_tx:usb_tx usb_rx_rec:usb_rec eth_rx:eth selftest:selftest; do
   src=${pair%%:*}; gold=$HC/gl_test/${pair##*:}_vectors.json
   ./tdasm "examples/$src.tds" --quiet --json "$out/$src.json" --load "$out/$src.load" || { echo "FAIL $src: assembler error"; fail=1; continue; }
   if diff <(fields "$gold") <(fields "$out/$src.json") >/dev/null; then
@@ -55,6 +55,7 @@ expect flag_range.tds         "flag 8 is out of range 0..7"
 expect duplicate_label.tds    "label \`a\` defined twice"
 expect timeout_range.tds      "timeout 1024 is out of range 0..1023"
 expect too_many_operands.tds  "too many operands for \`emit\`"
+expect loopback_range.tds     "loopback mask 256 is out of range 0..255"
 
 # --- 3. profile placement ----------------------------------------------
 # The loader's config index auto-increments from 0 and profile p byte k is
@@ -68,6 +69,19 @@ if [ "$got" = "$expected" ]; then
   echo "ok   .profile bytes land at index 32p + k"
 else
   echo "FAIL .profile placement: got $got"; fail=1
+fi
+
+# The loopback mask is index 24 (Profile_table.loopback_index): with only
+# profile 0 it follows profile 0 padded to 24 bytes; with a later profile
+# it replaces the padding byte at 24.
+printf '.prescale 0\n.cfg 1 2\n.loopback 5\n.profile 1 7\n.phys\n  halt\n.protocol\n  pop\n' > "$out/lb.tds"
+expected="[1, 2$(printf ', 0%.0s' $(seq 22)), 5$(printf ', 0%.0s' $(seq 7)), 7]"
+./tdasm "$out/lb.tds" --quiet --json "$out/lb.json" || fail=1
+got=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["cfg"])' "$out/lb.json")
+if [ "$got" = "$expected" ]; then
+  echo "ok   .loopback mask lands at index 24 under a later profile"
+else
+  echo "FAIL .loopback placement: got $got"; fail=1
 fi
 
 rm -rf "$out"

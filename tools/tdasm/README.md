@@ -29,9 +29,9 @@ AXIOM=/path/to/Axiom/.axiom-bin/axiom ./test.sh
 
 `test.sh` builds `tdasm` and checks two things:
 
-- The six examples assemble to exactly the prescale, config bytes and program words that `test/gen_vectors.ml` produces (`gl_test/*_vectors.json` in this repo). Those are the same vectors cocotb replays against the shipped Verilog and the gate-level netlist.
+- The seven examples assemble to exactly the prescale, config bytes and program words that `test/gen_vectors.ml` produces (`gl_test/*_vectors.json` in this repo). Those are the same vectors cocotb replays against the shipped Verilog and the gate-level netlist.
 - Every file in `tests/bad/` is refused with the expected error message.
-- `.profile` bytes land at config index 32N + k.
+- `.profile` bytes land at config index 32N + k, and the `.loopback` mask at index 24.
 
 ## Source syntax
 
@@ -44,6 +44,7 @@ Comments start with `;` or `#`. Operands are separated by spaces or commas. Numb
 | `.prescale N` | Timer prescale byte (0–255). Required. It's the first byte sent after reset. |
 | `.cfg B ...` | Bytes of bit-pipe profile 0 (also the glitch filter), up to 24 in total across lines (layout in `bitpipe.ml`). Sent with `cfg_sel`. |
 | `.profile N B ...` | Bytes of profile N (0–3), up to 24. Profile N byte k is config index 32N + k (`profile_table.ml`); the loader's index counts up from 0, so every profile up to the last one used is sent, padded to 32 bytes. |
+| `.loopback M` | Loopback mask (0–255), config index 24 (`Profile_table.loopback_index`, right after profile 0's 24 bytes). Each set bit makes that uio pin read the chip's own output, and its pad is never driven. Profile 0 is padded to 24 bytes and the mask sent after it; when later profiles are used too, the mask takes the place of the padding byte at index 24. Without it the config bytes are exactly as before. |
 | `.phys` | The lines that follow belong to µE0, the physical-layer engine. |
 | `.protocol` | The lines that follow belong to µE1, the protocol engine. |
 | `.word N` | A raw 16-bit word, in either engine. |
@@ -103,6 +104,7 @@ The order and checksum follow `dual_loader.ml`: the prescale byte, then the conf
 | `examples/usb_rx_rec.tds` | USB low-speed receive sampling from the bit-clock recovery: no calibrated waits, tolerates a sender off by 1.5%. |
 | `examples/eth_rx.tds` | 10 Mbit Ethernet receive at 50 MHz: Manchester decoding, delimiter hunt and CRC-32 in hardware, one µE0 instruction per frame. |
 | `examples/usb_tx.tds` | USB low-speed transmit: µE1 pushes a DATA0 packet, µE0 sends it through the transmit pipe on differential D-/D+ with the CRC appended, then the EOP. |
+| `examples/selftest.tds` | On-chip loopback self-test with nothing attached: `.loopback` loops pin 0 back, a USB packet goes out through the transmit pipe and back in through the receive pipe, and µE1 raises PASS (pin 4) and DONE (pin 5). |
 
 ## Notes
 

@@ -474,5 +474,4 @@ the receive pipe's. A shared CRC register, as first proposed, would have made th
 - Every existing suite passes with the synchronizer; the three timing-exact benches were realigned, not loosened.
 - Mutation check: the synchronizer removed, the guard never tripping, the guard tracking only the first write, the
   loopback mask ignored, a masked pad still driven, and the mask never written are each caught.
-- Not done: `tdasm` cannot yet write the loopback byte (it would need a directive that places it at index 24); hosts
-  send the 25 bytes directly, as the vectors do.
+- `tdasm` writes the mask with `.loopback <mask>` (index 24), and `selftest.tds` assembles to exactly the vector.

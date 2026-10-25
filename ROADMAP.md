@@ -486,6 +486,8 @@ harden: the run-time pins reached logic unsynchronized (STA's worst fast-corner 
 - `profile_table.ml`: loopback mask at index 24 (`loopback_index`). `tt_core.ml`: masked pins read the chip's own output
   and their pads are not driven. The self-test program is in `test/gen_vectors.ml` (`st_*`), `gl_test/selftest_vectors.json`,
   `test_tt_um_dual_selftest` and cocotb `loopback_self_test`.
+- `tdasm`: `.loopback <mask>` writes index 24 (after profile 0 padded to 24 bytes, or into its padding when later
+  profiles follow); `examples/selftest.tds` matches `selftest_vectors.json`; sources without it assemble byte-identically.
 
 **Verified:** all suites, the new ones included; cocotb 8/8 on the regenerated Verilog; the mutation check with six new
 faults, each caught. Not yet hardened.
