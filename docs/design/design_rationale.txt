@@ -475,3 +475,71 @@ the receive pipe's. A shared CRC register, as first proposed, would have made th
 - Mutation check: the synchronizer removed, the guard never tripping, the guard tracking only the first write, the
   loopback mask ignored, a masked pad still driven, and the mask never written are each caught.
 - `tdasm` writes the mask with `.loopback <mask>` (index 24), and `selftest.tds` assembles to exactly the vector.
+
+### Deviation 13: Timing closure at 70 MHz, and the rules for falling back (2026-10-25)
+
+**What happened.** The first 70 MHz harden failed setup by 13.06 ns at the slow corner (3.15 ns typical) and hold by
+0.043 ns. The root cause was one long chain: the RX profile pointer, through the 4:1 x 192-bit profile select, into the
+clock recovery's arithmetic, into `margin_busy`, into µE0's `advance`, and around the fetch loop back to the SRAM address.
+Lowering the clock would have hidden it and changed every protocol's samples per bit, so it was fixed in RTL instead, one
+cut at a time, each measured with post-synthesis STA (all three corners, about a minute per run):
+
+| Step | Slow-corner WNS (post-synthesis) | Kind |
+|---|---|---|
+| Baseline | -17.7 ns | |
+| A. Profile select registered | -10.2 ns | fixed latency: `Profile_table.select_latency` = 2 |
+| B. Recovery outputs off `advance` | -5.3 ns | `margin_busy` a superset; `bit_valid`/`bit_value` through `Clock_recovery.bit_output_latency` = 1 register |
+| C. Phase correction as parallel candidates | -1.66 ns | bit-exact |
+| D. Phase wrap as parallel candidates | about -0.8 ns | bit-exact |
+
+Cuts C and D compute every candidate result in parallel and select late; the six recovery, Ethernet and link-health
+suites pass unchanged, so they change no behavior. Cuts A and B add latency, and each is a named constant, because
+anything that timestamps or compares against the wire has to subtract it: a pin change reaches the engines
+`Dual.sync_latency` (2) cycles after the pad, a profile switch reaches the pipes `select_latency` (2) cycles after the
+write, and a decoded Manchester bit leaves the recovery `bit_output_latency` (1) cycle after its decode.
+
+What remains after the cuts is fanout, not logic depth: `rst_n` drives 1,336 loads unbuffered (about 11 ns of the
+post-synthesis path is load delay; the logic behind it is three gates), and the fetch path reaches its decision at
+8.2 ns (5.3 ns SRAM clock-to-output plus 2.8 ns decode, inside the 8.7 ns budget) before two unbuffered nets add about
+7 ns. Post-synthesis STA has no buffering, so those numbers rank paths but do not predict closure; place-and-route
+buffers exactly those nets. `PNR_CORNERS` now lists all three corners, so the resizer repairs the slow corner too, not only
+the typical one, and `GRT_RESIZER_HOLD_SLACK_MARGIN` is 0.1 ns for the hold miss.
+
+**A bug cut A exposed, which predates it.** A `PIPE_BIT` issued right after a profile switch that also resets the
+stream lost its first bit: the delayed reset landed on the same cycle as the released `PIPE_BIT`, and the reset won (a
+directed test read back 7 ones, 0xff80, instead of 8). Registering the select made the window two cycles wide, but the
+race existed since the profile table was added (commit 5439000). Fix: an interlock (`Profile_table.settling`) holds any
+pipe instruction (`PIPE_BIT`, `EMIT_TX`, the bit-pipe group) for all `select_latency` cycles after a pointer write, so
+instruction order, not cycle count, decides what runs on which profile. The banked entry on `main` (`9d7c327`) predates
+the profile table, so it never had this bug and needs no backport.
+
+**What was verified.** `test_profile_switch`: a switch to a CRC16 profile with a reset, then 8 `PIPE_BIT`s on a line held
+high; µE1 reads the CRC back, and the three possible outcomes (correct, interlock missing, alignment missing) give
+three different values, computed independently in the bench. Two mutants (no interlock; `select_latency` = 1) each fail
+it. Three existing mutant patterns were updated to the new code: 37 of 37 caught. Every suite, cocotb 8/8 and the
+formal FIFO proof pass.
+
+**Fallback rules, fixed now so they are not decided under deadline pressure.** The ladder is 70, then 60, then 50 MHz.
+A rung is tried only after the targeted fixes (reset and fetch fanout) have failed at the rung above it, because a
+slower clock changes every protocol's samples per bit and so costs a re-measurement, where a fanout fix does not.
+
+| Clock | 10 Mbit Ethernet, clocks per bit | Rule |
+|---|---|---|
+| 70 MHz | 7 | All claims as measured at 70 MHz. |
+| 60 MHz | 6 (about 6 ns per sample) | Every protocol suite and the jitter sweep rerun with timings for 60 MHz. Ethernet is claimed only if its suites and sweep pass; otherwise it is described as demonstrated in simulation at 70 MHz and not claimed for this silicon. |
+| 50 MHz | 5 | Same rule. (Ethernet at 50 MHz passed 30/30 frames with 10 ns of jitter before the synchronizer and the cuts; it must pass again, not be quoted.) |
+
+- **Core claims, at every rung:** the dual engines with the FIFO and its backpressure, CAPTURE, the loopback
+  self-test, the halt guard, and USB low-speed receive with clock recovery. Shadow joins this list only once it is
+  implemented and verified. If any core claim fails at a rung, that rung is out; claims are never narrowed below
+  this set to make a rung fit.
+- **Every claimed protocol needs its own pass at the shipped clock.** Samples per bit change for all of them, not just
+  Ethernet; USB LS, UART, SPI and I2C have margin, but margin is not a measurement.
+- **Jitter is stated in time, as a fraction of a bit, not in cycles.** A jitter of +-0.25 cycle is +-3.6 ns (3.6% of a
+  10 Mbit bit) at 70 MHz but +-5 ns (5%) at 50 MHz, so the same vector in cycles is a different test at each rung. At a
+  lower rung the committed vector is regenerated for the same jitter in nanoseconds (about +-0.21 cycle at 60 MHz,
+  +-0.18 at 50), and the tolerance sweep is reported in nanoseconds.
+- **Only numbers measured at the shipped clock are quoted.** If the chip ships at 60 MHz, no 70 MHz tolerance figure
+  appears in the docs or the write-up, even partly.
+- The clock lives in three places, changed together: `info.yaml` `clock_hz`, `src/config.json` `CLOCK_PERIOD`, and the
+  `Clock(...)` period in `gl_test/test.py`.

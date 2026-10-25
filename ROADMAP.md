@@ -492,7 +492,30 @@ harden: the run-time pins reached logic unsynchronized (STA's worst fast-corner 
 **Verified:** all suites, the new ones included; cocotb 8/8 on the regenerated Verilog; the mutation check with six new
 faults, each caught. Not yet hardened.
 
-## 14. Practical notes
+## 14. Timing closure at 70 MHz
+
+Reasons and the fallback rules are in `docs/design/design_rationale.txt`, Deviation 13.
+
+- First 70 MHz harden (before any of this): setup -13.06 ns slow / -3.15 ns typical, hold -0.043 ns. Root cause: RX
+  profile pointer -> 4:1 x 192-bit profile select -> clock-recovery arithmetic -> `margin_busy` -> `advance` -> fetch.
+- Iterated with post-synthesis STA (`scripts/run_to.sh <tag> --to OpenROAD.STAPrePNR`, about a minute, all corners)
+  in a throwaway worktree, then ported. Slow-corner WNS: -17.7 -> -10.2 (A, profile select registered) -> -5.3 (B,
+  recovery outputs off `advance`) -> -1.66 (C) -> about -0.8 ns (D, phase correction and wrap as parallel candidates).
+- `test_usb_transaction` failed after cut A (a CRC reload landing on the old profile); fixed by `after_select`.
+  Writing `test_profile_switch` for it found an older bug: a `PIPE_BIT` right after a switch with reset lost its first
+  bit (0xff80). Fixed by the `settling` interlock covering all `select_latency` cycles. Not on `main`, which predates
+  the profile table.
+- `src/config.json`: `PNR_CORNERS` = all three corners (the resizer only repaired typical before);
+  `GRT_RESIZER_HOLD_SLACK_MARGIN` 0.1.
+- Mutation check: two new mutants, three patterns updated to the new code; 37 of 37 caught.
+- Second 70 MHz harden (`63abd5a`): DRC, LVS and antenna clean, no slew, cap or fanout violations, hold met at every
+  corner (fast-corner worst 0.003 ns), setup met at typical (+2.59 ns) and fast (+6.56 ns), **setup failed at slow by
+  -4.23 ns** (329 endpoints). 17,720 standard cells (16,133 before) with 4,884 repair buffers; 30.6% utilization. The
+  three failing groups: the clock recovery's Manchester frame-end check (a config bit, through the phase arithmetic,
+  into `v_wrapped >= P/4`, -4.23 ns), µE0's instruction SRAM through decode (-2.27 ns), and µE1's (-1.22 ns). The
+  SRAM paths spend about 2 ns in wire buffers before their first gate: the macros sit far from the logic.
+
+## 15. Practical notes
 
 - Dune quirk: `lib/tt_core.ml` shares its name with the library, which suppresses automatic submodule aliasing, so
   sibling modules need explicit `module X = X` lines in `tt_core.ml`.

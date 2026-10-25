@@ -182,11 +182,31 @@ let create (i : Signal.t I.t) =
   let m = shifted_mag in
   let r = p -: phw1 in
   let d = phw1 -: p in
-  let up = mux2 ((msb r) |: (m >=: r)) (m -: r) (phw1 +: m) in
-  let down = mux2 ((~:(msb d)) &&: (d >=: m)) (d -: m) (phw1 -: m) in
+  let up_wraps = (msb r) |: (m >=: r) in
+  let down_wraps = (~:(msb d)) &&: (d >=: m) in
+  let up = mux2 up_wraps (m -: r) (phw1 +: m) in
+  let down = mux2 down_wraps (d -: m) (phw1 -: m) in
   let stay = mux2 (~:(msb d)) d phw1 in
   let v_wrapped = mux2 accept (mux2 neg up down) stay in
-  let strobe = running &&: (~:manch) &&: (phw <: half) &&: (v_wrapped >=: half) in
+  (* `v_wrapped >= x` for a threshold x derived from p (the strobe at P/2,
+     the Manchester check at P/4), without waiting for v_wrapped: each
+     candidate's compare is rewritten so that m stands alone against a bound
+     that does not depend on it (m - r >= x <=> m >= r + x, and so on),
+     computed in w + 2 signed bits so nothing overflows. The bounds are ready
+     with mag, leaving one compare after m instead of a subtract and a
+     compare (timing: the 70 MHz harden's worst path ended here). Only the
+     selected candidate's result is used, and that candidate is never
+     negative (each is chosen only where its sum is >= 0), so these signed
+     compares agree exactly with the unsigned v_wrapped >= x. *)
+  let wraps_past x =
+    let s v = sresize v (w + 2) in
+    let ms = s m and xs = s (uresize x w) and r_s = s r and d_s = s d and p1 = s phw1 in
+    let up_ge = mux2 up_wraps (ms >=+ (r_s +: xs)) (ms >=+ (xs -: p1)) in
+    let down_ge = mux2 down_wraps (ms <=+ (d_s -: xs)) (ms <=+ (p1 -: xs)) in
+    let stay_ge = mux2 (~:(msb d)) (d_s >=+ xs) (p1 >=+ xs) in
+    mux2 accept (mux2 neg up_ge down_ge) stay_ge
+  in
+  let strobe = running &&: (~:manch) &&: (phw <: half) &&: (wraps_past half) in
   (* the edge that ends `armed`: any edge, or in Manchester mode a rising one *)
   let snap = armed &&: edge &&: ((~:manch) |: line) in
 
@@ -203,7 +223,7 @@ let create (i : Signal.t I.t) =
   (* Manchester frame end: once the phase is past the acceptance zone
      around a mid-bit (P/4), that bit's edge must have come *)
   let zone_end = quarter in
-  let check = running &&: manch &&: (phw <: zone_end) &&: (v_wrapped >=: zone_end) in
+  let check = running &&: manch &&: (phw <: zone_end) &&: (wraps_past zone_end) in
   let zone_hit = wire 1 in
   zone_hit
   <== reg_fb ~enable:(one 1) spec ~width:1 ~f:(fun cur ->

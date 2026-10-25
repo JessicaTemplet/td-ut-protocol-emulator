@@ -45,7 +45,7 @@ MUTATIONS=(
   "recovery: phase correction sign flipped#lib/clock_recovery.ml#let v_wrapped = mux2 accept (mux2 neg up down) stay in#let v_wrapped = mux2 accept (mux2 neg down up) stay in"
   "recovery: acceptance window ignored#lib/clock_recovery.ml#((c.rec_window ==:. 0) |: (mag <=: window))#vdd"
   "recovery: period learning sign flipped#lib/clock_recovery.ml#let next = cur +: fstep in#let next = cur -: fstep in"
-  "recovery: strobe at the boundary, not mid-bit#lib/clock_recovery.ml#&&: (phw <: half) &&: (v_wrapped >=: half)#&&: (v_wrapped <: phw)"
+  "recovery: strobe at the boundary, not mid-bit#lib/clock_recovery.ml#&&: (phw <: half) &&: (wraps_past half)#&&: (v_wrapped <: phw)"
   "PIPE_BIT sync does not wait for the strobe#lib/engine.ml#       |: (bit_sync &&: (~:(rec_.Clock_recovery.O.pending)))#"
   "margin keeps the last edge, not the worst#lib/clock_recovery.ml#let bigger = measured &&: (mag >: worst) in#let bigger = measured in"
   "margin scaled by 32, not 64#lib/clock_recovery.ml#(sll (uresize worst dw) 6)#(sll (uresize worst dw) 5)"
