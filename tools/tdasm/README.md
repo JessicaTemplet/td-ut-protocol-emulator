@@ -1,6 +1,6 @@
 # tdasm: assembler and loader for TD-µT
 
-`tdasm` turns a readable `.tds` source file into the program words for both engines of `tt_um_dual`, then writes out the exact pin sequence a host uses to load them onto the chip. It's written in [Axiom](https://github.com/chrispaig3/Axiom), and is pinned to Axiom 0.7.8 (trunk commit `a3448340`). Axiom is pre-1.0 and changes quickly, so build with that version. A newer compiler may need small source changes.
+`tdasm` turns a readable `.tds` source file into the program words for both engines of `tt_um_dual`, then writes out the exact pin sequence a host uses to load them onto the chip. It's written in [Axiom](https://github.com/chrispaig3/Axiom), and is pinned to Axiom 0.7.9 (release tag `v0.7.9`, commit `2582b9ae`). Axiom is pre-1.0 and changes quickly, so build with that version. A newer compiler may need small source changes.
 
 ```
 tdasm prog.tds                      print a listing (address, word, source line)
@@ -17,7 +17,7 @@ You need the Axiom compiler plus `llc` and a C compiler (Linux or macOS). Build 
 
 ```bash
 git clone https://github.com/chrispaig3/Axiom.git && cd Axiom
-git checkout a3448340
+git checkout v0.7.9
 ./scripts/bootstrap-from-seed.sh --install .axiom-bin
 ```
 
@@ -111,3 +111,4 @@ The order and checksum follow `dual_loader.ml`: the prescale byte, then the conf
 - The instruction encodings follow `lib/engine.ml`, `lib/protocol_engine.ml` and `lib/dual_loader.ml`. If the ISA changes, update `tdasm.ax` and regenerate the vectors; `test.sh` fails until they agree.
 - The generated JSON and load scripts are plain data, so nothing else in this repo needs Axiom installed.
 - `tdasm` was first written against Axiom 0.7.5, then ported to 0.7.8. The port needed three changes: `cond` was replaced by a multi-branch `if`, `for` loops became `(for i in 0..n ...)`, and `strConcat`/`vecNewRef` were renamed or removed. The ported version produces byte-identical listings, JSON and load scripts for all three examples.
+- Ported to 0.7.9 with Axiom's `scripts/migrate-route-b.py` (grouped `(let (...) body)` became block-local `(let name value)` declarations, and the `Asm` constructor names its fields), then `axiom fmt`. By hand: `cast` became `as`, and `readFile` now answers a `Result`. Built with the `v0.7.9` tag, with `stable` at `e1d0a23e`, and with a `windows/ci-job` build, it gives byte-identical listings, JSON, load scripts, error messages and exit codes to the 0.7.8 build for every example and every `tests/bad` source. 0.7.8 cannot build the ported source.

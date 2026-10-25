@@ -95,34 +95,34 @@
 (:: newAsm Asm)
 (fn (newAsm)
   (Asm
-    0
-    0
-    0
-    false
-    0
-    false
-    vecNew
-    vecNew
-    vecNew
-    vecNew
-    vecNew
-    vecNew
-    vecNew
-    vecNew
-    vecNew
-    vecNew
-    vecNew
-    vecNew))
+    :errors 0
+    :sect 0
+    :prescale 0
+    :prescaleSet false
+    :loopback 0
+    :loopbackSet false
+    :cfg vecNew
+    :p0 vecNew
+    :p1 vecNew
+    :p2 vecNew
+    :p3 vecNew
+    :phys vecNew
+    :proto vecNew
+    :physSrc vecNew
+    :protoSrc vecNew
+    :labNames vecNew
+    :labSect vecNew
+    :labAddr vecNew))
 
 ; The bytes given for profile n (`.cfg` is profile 0).
 (:: profVec (-> Asm Int (Vec Int)))
 (fn (profVec a n)
   (if (== n 0)
-    a.p0
+      a.p0
     (== n 1)
-    a.p1
+      a.p1
     (== n 2)
-    a.p2
+      a.p2
     a.p3))
 
 ;@axiom:effect(io)
@@ -150,28 +150,29 @@
 ; The line without its `;` or `#` comment.
 (:: stripComment (-> String String))
 (fn (stripComment s)
-  (let (
-    (mut i 0)
-    (mut cut (strLen s))
-  )
+  {
+    (let mut i 0)
+    (let mut cut (strLen s))
     {
       (while (< i cut)
-        (let ((b (strByte s i)))
+        {
+          (let b (strByte s i))
           (if (|| (== b 59) (== b 35))
             (set cut i)
-            (set i (+ i 1)))))
+            (set i (+ i 1)))
+        })
       (strSlice s 0 cut)
-    }))
+    }
+  })
 
 ; Whitespace/comma-separated tokens of one line, comment removed.
 (:: tokens (-> String (Vec String)))
 (fn (tokens line)
-  (let (
-    (s (stripComment line))
-    (out vecNew)
-    (mut i 0)
-    (mut start (- 0 1))
-  )
+  {
+    (let s (stripComment line))
+    (let out vecNew)
+    (let mut i 0)
+    (let mut start (- 0 1))
     {
       (while (< i (strLen s))
         {
@@ -191,7 +192,8 @@
         (vecPush out (strSlice s start (- (strLen s) start)))
         out)
       out
-    }))
+    }
+  })
 
 (:: tok (-> (Vec String) Int String))
 (fn (tok v i)
@@ -200,12 +202,12 @@
 ; A decimal or 0x/0X hex literal, or None.
 (:: parseNum (-> String (Option Int)))
 (fn (parseNum s)
-  (if (&& (> (strLen s) 2) (&& (== (strByte s 0) 48) (|| (== (strByte s 1) 120) (== (strByte s 1) 88))))
-    (let (
-      (mut i 2)
-      (mut acc 0)
-      (mut ok true)
-    )
+  (if (&& (> (strLen s) 2)
+        (&& (== (strByte s 0) 48) (|| (== (strByte s 1) 120) (== (strByte s 1) 88))))
+    {
+      (let mut i 2)
+      (let mut acc 0)
+      (let mut ok true)
       {
         (while (< i (strLen s))
           {
@@ -227,7 +229,8 @@
         (if ok
           (Some acc)
           (None))
-      })
+      }
+    }
     (strParseInt s)))
 
 (:: endsWithColon (-> String Bool))
@@ -244,10 +247,9 @@
 
 (:: validLabel (-> String Bool))
 (fn (validLabel s)
-  (let (
-    (mut i 0)
-    (mut ok (&& (> (strLen s) 0) (neg (strIsDigit (strByte s 0)))))
-  )
+  {
+    (let mut i 0)
+    (let mut ok (&& (> (strLen s) 0) (neg (strIsDigit (strByte s 0)))))
     {
       (while (&& ok (< i (strLen s)))
         {
@@ -255,7 +257,8 @@
           (set i (+ i 1))
         })
       ok
-    }))
+    }
+  })
 
 ; ------------------------------------------------------------------
 ; Labels
@@ -263,10 +266,9 @@
 ; Index of `name` in the label table, or None.
 (:: findLabel (-> Asm String (Option Int)))
 (fn (findLabel a name)
-  (let (
-    (mut i 0)
-    (mut found (- 0 1))
-  )
+  {
+    (let mut i 0)
+    (let mut found (- 0 1))
     {
       (while (&& (< found 0) (< i (vecLen a.labNames)))
         {
@@ -278,15 +280,16 @@
       (if (>= found 0)
         (Some found)
         (None))
-    }))
+    }
+  })
 
 ;@axiom:effect(io)
 (:: defineLabel (-> Asm Int String Int Int))
 (fn (defineLabel a lineNo name addr)
   (if (== a.sect (sectNone))
-    (report a lineNo (format "label `{name}` outside a .phys or .protocol section"))
+      (report a lineNo (format "label `{name}` outside a .phys or .protocol section"))
     (neg (validLabel name))
-    (report a lineNo (format "`{name}` is not a valid label name"))
+      (report a lineNo (format "`{name}` is not a valid label name"))
     (match (findLabel a name)
       ((Some i) (report a lineNo (format "label `{name}` defined twice")))
       ((None)
@@ -311,7 +314,8 @@
       (report a lineNo (format "missing {what} operand"))
       0
     }
-    (let ((t (tok ts i)))
+    {
+      (let t (tok ts i))
       (match (parseNum t)
         ((None)
           {
@@ -326,7 +330,8 @@
               0
             }
             n)
-        )))))
+        ))
+    }))
 
 ; A branch target: a number, or a label in the current section.
 ;@axiom:effect(io)
@@ -337,7 +342,8 @@
       (report a lineNo "missing branch target")
       0
     }
-    (let ((t (tok ts i)))
+    {
+      (let t (tok ts i))
       (match (parseNum t)
         ((Some n)
           (if (|| (< n 0) (>= n (ramDepth)))
@@ -356,23 +362,24 @@
               }
             )
             ((Some k)
-              (if (!=
-                (cast Int (vecGet a.labSect k))
-                a.sect)
+              (if (!= (as (vecGet a.labSect k) Int) a.sect)
                 {
                   (report a lineNo (format "label `{t}` belongs to the other engine"))
                   0
                 }
-                (cast Int (vecGet a.labAddr k)))
+                (as (vecGet a.labAddr k) Int))
             ))
-        )))))
+        ))
+    }))
 
 ;@axiom:effect(io)
 (:: arity (-> Asm Int (Vec String) Int Int))
 (fn (arity a lineNo ts n)
   (if (> (vecLen ts) (+ n 1))
-    (let ((m (tok ts 0)))
-      (report a lineNo (format "too many operands for `{m}` (takes {n})")))
+    {
+      (let m (tok ts 0))
+      (report a lineNo (format "too many operands for `{m}` (takes {n})"))
+    }
     0))
 
 ; ------------------------------------------------------------------
@@ -389,107 +396,111 @@
 (:: pipeFlag (-> String Int))
 (fn (pipeFlag t)
   (if (strEq t "reset")
-    1
+      1
     (strEq t "idle_high")
-    2
+      2
     (strEq t "crc_init")
-    4
+      4
     (strEq t "tx_reset")
-    8
+      8
     (strEq t "tx_crc")
-    16
+      16
     (strEq t "sel_rx")
-    32
+      32
     (strEq t "sel_tx")
-    64
+      64
     0))
 
 ; `p0`..`p3` -> 0..3, anything else -> -1.
 (:: profTok (-> String Int))
 (fn (profTok t)
   (if (strEq t "p0")
-    0
+      0
     (strEq t "p1")
-    1
+      1
     (strEq t "p2")
-    2
+      2
     (strEq t "p3")
-    3
+      3
     (- 0 1)))
 
 ; Optional flag words after `pipe_ctrl`. Answers ops | (profile << 16).
 ;@axiom:effect(io)
 (:: pipeCtrlOps (-> Asm Int (Vec String) Int))
 (fn (pipeCtrlOps a lineNo ts)
-  (let (
-    (mut i 1)
-    (mut ops 0)
-    (mut prof 0)
-  )
+  {
+    (let mut i 1)
+    (let mut ops 0)
+    (let mut prof 0)
     {
       (while (< i (vecLen ts))
-        (let ((t (tok ts i)))
+        {
+          (let t (tok ts i))
           {
             (if (>= (profTok t) 0)
-              {
-                (set prof (profTok t))
-                0
-              }
+                {
+                  (set prof (profTok t))
+                  0
+                }
               (== (pipeFlag t) 0)
-              (report a lineNo (format "pipe_ctrl flag `{t}` is not reset, idle_high, crc_init, tx_reset, tx_crc, sel_rx, sel_tx or p0..p3"))
+                (report a lineNo
+                  (format
+                    "pipe_ctrl flag `{t}` is not reset, idle_high, crc_init, tx_reset, tx_crc, sel_rx, sel_tx or p0..p3"))
               {
                 (set ops (| ops (pipeFlag t)))
                 0
               })
             (set i (+ i 1))
-          }))
+          }
+        })
       (| ops (<< prof 16))
-    }))
+    }
+  })
 
 ; The payload bit a trailing flag word of instruction `m` sets, or 0 when
 ; `t` is not one of its flags.
 (:: flagBit (-> String String Int))
 (fn (flagBit m t)
   (if (strEq m "emit_tx")
-    (if (strEq t "open_drain")
-      1
-      (strEq t "diff")
-      4
-      0)
+      (if (strEq t "open_drain")
+          1
+        (strEq t "diff")
+          4
+        0)
     (|| (strEq m "tx_push") (strEq m "tx_echo"))
-    (if (strEq t "last")
-      256
-      0)
+      (if (strEq t "last")
+        256
+        0)
     (strEq m "cfg_wr")
-    (if (strEq t "hi")
-      128
-      0)
+      (if (strEq t "hi")
+        128
+        0)
     (strEq m "pipe_bit")
-    (if (strEq t "sync")
-      1
-      0)
+      (if (strEq t "sync")
+        1
+        0)
     (strEq m "profile")
-    (if (strEq t "rx")
-      4
-      (strEq t "tx")
-      8
-      (strEq t "crc_init")
-      16
-      0)
+      (if (strEq t "rx")
+          4
+        (strEq t "tx")
+          8
+        (strEq t "crc_init")
+          16
+        0)
     0))
 
 ; OR of the flag words from token `first` on.
 ;@axiom:effect(io)
 (:: flagsFrom (-> Asm Int (Vec String) Int Int))
 (fn (flagsFrom a lineNo ts first)
-  (let (
-    (m (tok ts 0))
-    (mut i first)
-    (mut ops 0)
-  )
+  {
+    (let m (tok ts 0))
+    (let mut i first)
+    (let mut ops 0)
     {
       (while (< i (vecLen ts))
-        (let ((t (tok ts i)))
+        {
+          (let t (tok ts i))
           {
             (if (== (flagBit m t) 0)
               (report a lineNo (format "`{t}` is not a flag of `{m}`"))
@@ -498,9 +509,11 @@
                 0
               })
             (set i (+ i 1))
-          }))
+          }
+        })
       ops
-    }))
+    }
+  })
 
 ; A flag number for br_flag / br_noflag: 0..7, `tx_more` (0),
 ; `rec_overrun` (1) or `rx_lost` (2).
@@ -508,347 +521,240 @@
 (:: flagOperand (-> Asm Int (Vec String) Int Int))
 (fn (flagOperand a lineNo ts i)
   (if (&& (< i (vecLen ts)) (strEq (tok ts i) "tx_more"))
-    0
+      0
     (&& (< i (vecLen ts)) (strEq (tok ts i) "rec_overrun"))
-    1
+      1
     (&& (< i (vecLen ts)) (strEq (tok ts i) "rx_lost"))
-    2
-    (operand
-      a
-      lineNo
-      ts
-      i
-      "flag"
-      7)))
+      2
+    (operand a lineNo ts i "flag" 7)))
 
 ; uE0 (phys) instruction word, or -1 when the mnemonic is unknown.
 ;@axiom:effect(io)
 (:: encPhys (-> Asm Int (Vec String) Int))
 (fn (encPhys a ln ts)
-  (let ((m (tok ts 0)))
+  {
+    (let m (tok ts 0))
     (if (|| (strEq m "wait_fall") (strEq m "wait_rise"))
-      (let (
-        (pin (operand
-          a
-          ln
-          ts
-          1
-          "pin"
-          7))
-        (ticks (if (> (vecLen ts) 2)
-          (operand
-            a
-            ln
-            ts
-            2
-            "timeout"
-            1023)
-          0))
-      )
         {
-          (arity a ln ts 2)
-          (enc
-            0
-            pin
-            (if (strEq m "wait_rise")
-              1
-              0)
-            ticks)
-        })
-      (strEq m "halt")
-      {
-        (arity a ln ts 0)
-        (enc 0 7 0 0)
-      }
-      (strEq m "emit")
-      (let (
-        (pin (operand
-          a
-          ln
-          ts
-          1
-          "pin"
-          7))
-        (lvl (operand
-          a
-          ln
-          ts
-          2
-          "level"
-          1))
-      )
-        {
-          (arity a ln ts 2)
-          (enc 1 pin lvl 0)
-        })
-      (strEq m "release")
-      (let ((pin (operand
-        a
-        ln
-        ts
-        1
-        "pin"
-        7)))
-        {
-          (arity a ln ts 1)
-          (enc 1 pin 0 1)
-        })
-      (|| (strEq m "shift") (strEq m "shift_push"))
-      (let ((pin (operand
-        a
-        ln
-        ts
-        1
-        "pin"
-        7)))
-        {
-          (arity a ln ts 1)
-          (enc
-            2
-            pin
-            0
-            (if (strEq m "shift_push")
-              1
+          (let pin (operand a ln ts 1 "pin" 7))
+          (let ticks
+            (if (> (vecLen ts) 2)
+              (operand a ln ts 2 "timeout" 1023)
               0))
-        })
+          {
+            (arity a ln ts 2)
+            (enc 0 pin
+              (if (strEq m "wait_rise")
+                1
+                0)
+              ticks)
+          }
+        }
+      (strEq m "halt")
+        {
+          (arity a ln ts 0)
+          (enc 0 7 0 0)
+        }
+      (strEq m "emit")
+        {
+          (let pin (operand a ln ts 1 "pin" 7))
+          (let lvl (operand a ln ts 2 "level" 1))
+          {
+            (arity a ln ts 2)
+            (enc 1 pin lvl 0)
+          }
+        }
+      (strEq m "release")
+        {
+          (let pin (operand a ln ts 1 "pin" 7))
+          {
+            (arity a ln ts 1)
+            (enc 1 pin 0 1)
+          }
+        }
+      (|| (strEq m "shift") (strEq m "shift_push"))
+        {
+          (let pin (operand a ln ts 1 "pin" 7))
+          {
+            (arity a ln ts 1)
+            (enc 2 pin 0
+              (if (strEq m "shift_push")
+                1
+                0))
+          }
+        }
       (strEq m "capture")
-      (let ((pin (operand
-        a
-        ln
-        ts
-        1
-        "pin"
-        7)))
         {
-          (arity a ln ts 1)
-          (enc 2 pin 1 0)
-        })
+          (let pin (operand a ln ts 1 "pin" 7))
+          {
+            (arity a ln ts 1)
+            (enc 2 pin 1 0)
+          }
+        }
       (strEq m "pipe_bit")
-      ; optional `sync`: wait for the clock-recovery strobe first
-      (let ((pin (operand
-        a
-        ln
-        ts
-        1
-        "pin"
-        7)))
-        (enc 2 pin 1 (| 256 (flagsFrom a ln ts 2))))
-      (strEq m "pipe_run")
-      ; PIPE_BIT run: wait for a Manchester frame's end while the decoder
-      ; steps the pipe (10 Mbit Ethernet)
-      (let ((pin (operand
-        a
-        ln
-        ts
-        1
-        "pin"
-        7)))
+        ; optional `sync`: wait for the clock-recovery strobe first
         {
-          (arity a ln ts 1)
-          (enc 2 pin 1 260)
-        })
+          (let pin (operand a ln ts 1 "pin" 7))
+          (enc 2 pin 1 (| 256 (flagsFrom a ln ts 2)))
+        }
+      (strEq m "pipe_run")
+        ; PIPE_BIT run: wait for a Manchester frame's end while the decoder
+        ; steps the pipe (10 Mbit Ethernet)
+        {
+          (let pin (operand a ln ts 1 "pin" 7))
+          {
+            (arity a ln ts 1)
+            (enc 2 pin 1 260)
+          }
+        }
       (strEq m "pipe_sync")
-      ; PIPE_BIT sync + nostep: wait for the strobe, do not sample
-      {
-        (arity a ln ts 0)
-        (enc 2 0 1 259)
-      }
+        ; PIPE_BIT sync + nostep: wait for the strobe, do not sample
+        {
+          (arity a ln ts 0)
+          (enc 2 0 1 259)
+        }
       (strEq m "pipe_status")
-      {
-        (arity a ln ts 0)
-        (enc 2 0 1 512)
-      }
+        {
+          (arity a ln ts 0)
+          (enc 2 0 1 512)
+        }
       ; the other PIPE_STATUS words: CRC register halves (a bad packet's
       ; syndrome) and the clock recovery's learned period
       (strEq m "pipe_crc_lo")
-      {
-        (arity a ln ts 0)
-        (enc 2 0 1 513)
-      }
+        {
+          (arity a ln ts 0)
+          (enc 2 0 1 513)
+        }
       (strEq m "pipe_crc_hi")
-      {
-        (arity a ln ts 0)
-        (enc 2 0 1 514)
-      }
+        {
+          (arity a ln ts 0)
+          (enc 2 0 1 514)
+        }
       (strEq m "pipe_period")
-      {
-        (arity a ln ts 0)
-        (enc 2 0 1 515)
-      }
+        {
+          (arity a ln ts 0)
+          (enc 2 0 1 515)
+        }
       (strEq m "pipe_ctrl")
-      (let ((r (pipeCtrlOps a ln ts)))
-        (enc 2 (>> r 16) 1 (| 768 (& r 255))))
+        {
+          (let r (pipeCtrlOps a ln ts))
+          (enc 2 (>> r 16) 1 (| 768 (& r 255)))
+        }
       (strEq m "emit_tx")
-      ; EMIT_STATE with payload[1]: the transmit pipe's next line bit
-      (let ((pin (operand
-        a
-        ln
-        ts
-        1
-        "pin"
-        7)))
-        (enc 1 pin 0 (| 2 (flagsFrom a ln ts 2))))
+        ; EMIT_STATE with payload[1]: the transmit pipe's next line bit
+        {
+          (let pin (operand a ln ts 1 "pin" 7))
+          (enc 1 pin 0 (| 2 (flagsFrom a ln ts 2)))
+        }
       (|| (strEq m "br_flag") (strEq m "br_noflag"))
-      ; BRANCH_COND with payload[9]: an internal flag instead of a pin
-      (let (
-        (f (flagOperand a ln ts 1))
-        (t (target a ln ts 2))
-      )
+        ; BRANCH_COND with payload[9]: an internal flag instead of a pin
         {
-          (arity a ln ts 2)
-          (enc
-            3
-            f
-            (if (strEq m "br_flag")
-              1
-              0)
-            (| 512 t))
-        })
+          (let f (flagOperand a ln ts 1))
+          (let t (target a ln ts 2))
+          {
+            (arity a ln ts 2)
+            (enc 3 f
+              (if (strEq m "br_flag")
+                1
+                0)
+              (| 512 t))
+          }
+        }
       (|| (strEq m "br_high") (strEq m "br_low"))
-      (let (
-        (pin (operand
-          a
-          ln
-          ts
-          1
-          "pin"
-          7))
-        (t (target a ln ts 2))
-      )
         {
-          (arity a ln ts 2)
-          (enc
-            3
-            pin
-            (if (strEq m "br_high")
-              1
-              0)
-            t)
-        })
-      (- 0 1))))
+          (let pin (operand a ln ts 1 "pin" 7))
+          (let t (target a ln ts 2))
+          {
+            (arity a ln ts 2)
+            (enc 3 pin
+              (if (strEq m "br_high")
+                1
+                0)
+              t)
+          }
+        }
+      (- 0 1))
+  })
 
 ; uE1 (protocol) instruction word, or -1 when the mnemonic is unknown.
 ;@axiom:effect(io)
 (:: encProto (-> Asm Int (Vec String) Int))
 (fn (encProto a ln ts)
-  (let ((m (tok ts 0)))
+  {
+    (let m (tok ts 0))
     (if (strEq m "pop")
-      {
-        (arity a ln ts 0)
-        (enc 0 0 0 0)
-      }
+        {
+          (arity a ln ts 0)
+          (enc 0 0 0 0)
+        }
       ; the transmit / configuration group: opcode 00 with mode 1, the
       ; operation in pin_sel (protocol_engine.ml)
       (strEq m "tx_push")
-      (let ((b (operand
-        a
-        ln
-        ts
-        1
-        "byte"
-        255)))
-        (enc 0 0 1 (| b (flagsFrom a ln ts 2))))
+        {
+          (let b (operand a ln ts 1 "byte" 255))
+          (enc 0 0 1 (| b (flagsFrom a ln ts 2)))
+        }
       (strEq m "tx_echo")
-      (enc 0 1 1 (flagsFrom a ln ts 1))
+        (enc 0 1 1 (flagsFrom a ln ts 1))
       (strEq m "cfg_wr")
-      (let ((ix (operand
-        a
-        ln
-        ts
-        1
-        "config index"
-        127)))
-        (enc 0 2 1 (| ix (flagsFrom a ln ts 2))))
+        {
+          (let ix (operand a ln ts 1 "config index" 127))
+          (enc 0 2 1 (| ix (flagsFrom a ln ts 2)))
+        }
       (strEq m "profile")
-      (let ((p (operand
-        a
-        ln
-        ts
-        1
-        "profile"
-        3)))
-        (enc 0 3 1 (| p (flagsFrom a ln ts 2))))
+        {
+          (let p (operand a ln ts 1 "profile" 3))
+          (enc 0 3 1 (| p (flagsFrom a ln ts 2)))
+        }
       (strEq m "emit")
-      (let (
-        (pin (operand
-          a
-          ln
-          ts
-          1
-          "pin"
-          7))
-        (lvl (operand
-          a
-          ln
-          ts
-          2
-          "level"
-          1))
-      )
         {
-          (arity a ln ts 2)
-          (enc 1 pin lvl 0)
-        })
+          (let pin (operand a ln ts 1 "pin" 7))
+          (let lvl (operand a ln ts 2 "level" 1))
+          {
+            (arity a ln ts 2)
+            (enc 1 pin lvl 0)
+          }
+        }
       (strEq m "release")
-      (let ((pin (operand
-        a
-        ln
-        ts
-        1
-        "pin"
-        7)))
         {
-          (arity a ln ts 1)
-          (enc 1 pin 0 1)
-        })
+          (let pin (operand a ln ts 1 "pin" 7))
+          {
+            (arity a ln ts 1)
+            (enc 1 pin 0 1)
+          }
+        }
       (|| (strEq m "br_bit1") (strEq m "br_bit0"))
-      ; bits 0-7 live in the pin field, bits 8-15 set payload[9]
-      (let (
-        (bit (operand
-          a
-          ln
-          ts
-          1
-          "word bit"
-          15))
-        (t (target a ln ts 2))
-      )
+        ; bits 0-7 live in the pin field, bits 8-15 set payload[9]
         {
-          (arity a ln ts 2)
-          (enc
-            2
-            (& bit 7)
-            (if (strEq m "br_bit1")
-              1
-              0)
-            (|
-              t
-              (if (>= bit 8)
-                512
-                0)))
-        })
+          (let bit (operand a ln ts 1 "word bit" 15))
+          (let t (target a ln ts 2))
+          {
+            (arity a ln ts 2)
+            (enc 2 (& bit 7)
+              (if (strEq m "br_bit1")
+                1
+                0)
+              (| t
+                (if (>= bit 8)
+                  512
+                  0)))
+          }
+        }
       (|| (strEq m "br_high") (strEq m "br_low"))
-      (let (
-        (pin (operand
-          a
-          ln
-          ts
-          1
-          "pin"
-          7))
-        (t (target a ln ts 2))
-      )
         {
-          (arity a ln ts 2)
-          (enc
-            3
-            pin
-            (if (strEq m "br_high")
-              1
-              0)
-            t)
-        })
-      (- 0 1))))
+          (let pin (operand a ln ts 1 "pin" 7))
+          (let t (target a ln ts 2))
+          {
+            (arity a ln ts 2)
+            (enc 3 pin
+              (if (strEq m "br_high")
+                1
+                0)
+              t)
+          }
+        }
+      (- 0 1))
+  })
 
 ; ------------------------------------------------------------------
 ; Bit-pipe profiles
@@ -857,30 +763,24 @@
 ;@axiom:effect(io)
 (:: cfgBytes (-> Asm Int (Vec String) Int Int Int))
 (fn (cfgBytes a lineNo ts first p)
-  (let (
-    (v (profVec a p))
-    (m (tok ts 0))
-    (mut k first)
-  )
+  {
+    (let v (profVec a p))
+    (let m (tok ts 0))
+    (let mut k first)
     {
       (if (>= first (vecLen ts))
         (report a lineNo (format "{m} needs at least one byte"))
         0)
       (while (< k (vecLen ts))
         {
-          (vecPush v (operand
-            a
-            lineNo
-            ts
-            k
-            "config byte"
-            255))
+          (vecPush v (operand a lineNo ts k "config byte" 255))
           (set k (+ k 1))
         })
       (if (> (vecLen v) (cfgMax))
         (report a lineNo (format "more than 24 config bytes for profile {p}"))
         0)
-    }))
+    }
+  })
 
 ; Padding byte at index i of profile p's slot: the loopback mask at
 ; index 24 of profile 0 when `.loopback` was given, 0 otherwise.
@@ -897,12 +797,12 @@
 ; follow, else profile 0 is padded to 24 bytes and the mask sent last.
 (:: flattenCfg (-> Asm Int))
 (fn (flattenCfg a)
-  (let (
-    (mut last (if a.loopbackSet
-      0
-      (- 0 1)))
-    (mut p 0)
-  )
+  {
+    (let mut last
+      (if a.loopbackSet
+        0
+        (- 0 1)))
+    (let mut p 0)
     {
       (while (< p (nProfiles))
         {
@@ -916,10 +816,9 @@
         })
       (set p 0)
       (while (<= p last)
-        (let (
-          (v (profVec a p))
-          (mut i 0)
-        )
+        {
+          (let v (profVec a p))
+          (let mut i 0)
           {
             (while (< i (vecLen v))
               {
@@ -927,29 +826,31 @@
                 (set i (+ i 1))
               })
             (if (< p last)
-              {
-                (while (< i (profStride))
-                  {
-                    (vecPush a.cfg (padByte a p i))
-                    (set i (+ i 1))
-                  })
-                0
-              }
+                {
+                  (while (< i (profStride))
+                    {
+                      (vecPush a.cfg (padByte a p i))
+                      (set i (+ i 1))
+                    })
+                  0
+                }
               (&& a.loopbackSet (== p 0))
-              {
-                (while (< i (loopbackIndex))
-                  {
-                    (vecPush a.cfg 0)
-                    (set i (+ i 1))
-                  })
-                (vecPush a.cfg a.loopback)
-                0
-              }
+                {
+                  (while (< i (loopbackIndex))
+                    {
+                      (vecPush a.cfg 0)
+                      (set i (+ i 1))
+                    })
+                  (vecPush a.cfg a.loopback)
+                  0
+                }
               0)
             (set p (+ p 1))
-          }))
+          }
+        })
       0
-    }))
+    }
+  })
 
 ; ------------------------------------------------------------------
 ; The two passes
@@ -967,140 +868,112 @@
 ;@axiom:effect(io)
 (:: runPass (-> Asm (Vec String) Int Int))
 (fn (runPass a lines pass)
-  (let (
-    (mut li 0)
-    (mut pc0 0)
-    (mut pc1 0)
-  )
+  {
+    (let mut li 0)
+    (let mut pc0 0)
+    (let mut pc1 0)
     {
       (set a.sect (sectNone))
       (while (< li (vecLen lines))
-        (let (
-          (line (vecGet lines li))
-          (ln (+ li 1))
-          (ts0 (tokens line))
-          (mut first 0)
-        )
+        {
+          (let line (vecGet lines li))
+          (let ln (+ li 1))
+          (let ts0 (tokens line))
+          (let mut first 0)
           {
             ; leading `name:` labels
             (while (&& (< first (vecLen ts0)) (endsWithColon (tok ts0 first)))
               {
                 (if (== pass 1)
-                  (defineLabel
-                    a
-                    ln
-                    (labelOf (tok ts0 first))
+                  (defineLabel a ln (labelOf (tok ts0 first))
                     (if (== a.sect (sectPhys))
                       pc0
                       pc1))
                   0)
                 (set first (+ first 1))
               })
-            (let ((ts vecNew))
+            {
+              (let ts vecNew)
               {
-                (let ((mut k first))
+                {
+                  (let mut k first)
                   (while (< k (vecLen ts0))
                     {
                       (vecPush ts (tok ts0 k))
                       (set k (+ k 1))
-                    }))
+                    })
+                }
                 (if (== (vecLen ts) 0)
                   0
-                  (let ((m (tok ts 0)))
+                  {
+                    (let m (tok ts 0))
                     (if (strEq m ".phys")
-                      {
-                        (arity a ln ts 0)
-                        (set a.sect (sectPhys))
-                        0
-                      }
+                        {
+                          (arity a ln ts 0)
+                          (set a.sect (sectPhys))
+                          0
+                        }
                       (strEq m ".protocol")
-                      {
-                        (arity a ln ts 0)
-                        (set a.sect (sectProto))
-                        0
-                      }
+                        {
+                          (arity a ln ts 0)
+                          (set a.sect (sectProto))
+                          0
+                        }
                       (strEq m ".prescale")
-                      (if (== pass 1)
-                        {
-                          (if a.prescaleSet
-                            (report a ln ".prescale given twice")
-                            0)
-                          (set a.prescale (operand
-                            a
-                            ln
-                            ts
-                            1
-                            "prescale"
-                            255))
-                          (set a.prescaleSet true)
-                          (arity a ln ts 1)
-                        }
-                        0)
+                        (if (== pass 1)
+                          {
+                            (if a.prescaleSet
+                              (report a ln ".prescale given twice")
+                              0)
+                            (set a.prescale (operand a ln ts 1 "prescale" 255))
+                            (set a.prescaleSet true)
+                            (arity a ln ts 1)
+                          }
+                          0)
                       (strEq m ".cfg")
-                      (if (== pass 1)
-                        (cfgBytes a ln ts 1 0)
-                        0)
+                        (if (== pass 1)
+                          (cfgBytes a ln ts 1 0)
+                          0)
                       (strEq m ".loopback")
-                      (if (== pass 1)
-                        {
-                          (if a.loopbackSet
-                            (report a ln ".loopback given twice")
-                            0)
-                          (set a.loopback (operand
-                            a
-                            ln
-                            ts
-                            1
-                            "loopback mask"
-                            255))
-                          (set a.loopbackSet true)
-                          (arity a ln ts 1)
-                        }
-                        0)
+                        (if (== pass 1)
+                          {
+                            (if a.loopbackSet
+                              (report a ln ".loopback given twice")
+                              0)
+                            (set a.loopback (operand a ln ts 1 "loopback mask" 255))
+                            (set a.loopbackSet true)
+                            (arity a ln ts 1)
+                          }
+                          0)
                       (strEq m ".profile")
-                      (if (== pass 1)
-                        (cfgBytes
-                          a
-                          ln
-                          ts
-                          2
-                          (operand
-                            a
-                            ln
-                            ts
-                            1
-                            "profile"
-                            3))
-                        0)
+                        (if (== pass 1)
+                          (cfgBytes a ln ts 2 (operand a ln ts 1 "profile" 3))
+                          0)
                       (== a.sect (sectNone))
-                      (report a ln (format "instruction `{m}` before any .phys or .protocol line"))
+                        (report a ln
+                          (format "instruction `{m}` before any .phys or .protocol line"))
                       (== pass 1)
-                      {
-                        (if (== a.sect (sectPhys))
-                          (set pc0 (+ pc0 1))
-                          (set pc1 (+ pc1 1)))
-                        0
-                      }
-                      (let ((w 
-                        (if (strEq m ".word")
-                          (let ((v (operand
-                            a
-                            ln
-                            ts
-                            1
-                            "word"
-                            65535)))
-                            {
-                              (arity a ln ts 1)
-                              v
-                            })
+                        {
                           (if (== a.sect (sectPhys))
-                            (encPhys a ln ts)
-                            (encProto a ln ts)))))
+                            (set pc0 (+ pc0 1))
+                            (set pc1 (+ pc1 1)))
+                          0
+                        }
+                      {
+                        (let w
+                          (if (strEq m ".word")
+                            {
+                              (let v (operand a ln ts 1 "word" 65535))
+                              {
+                                (arity a ln ts 1)
+                                v
+                              }
+                            }
+                            (if (== a.sect (sectPhys))
+                              (encPhys a ln ts)
+                              (encProto a ln ts))))
                         (if (< w 0)
-                          (report
-                            a
-                            ln
+                          (report a ln
                             (if (== a.sect (sectPhys))
                               (format "unknown uE0 (.phys) instruction `{m}`")
                               (format "unknown uE1 (.protocol) instruction `{m}`")))
@@ -1112,10 +985,14 @@
                                 a.protoSrc)
                               (strTrim (stripComment line)))
                             0
-                          })))))
-              })
+                          })
+                      })
+                  })
+              }
+            }
             (set li (+ li 1))
-          }))
+          }
+        })
       (if (> pc0 (ramDepth))
         (report a 0 (format ".phys program is {pc0} words; uE0 holds 512"))
         0)
@@ -1123,7 +1000,8 @@
         (report a 0 (format ".protocol program is {pc1} words; uE1 holds 512"))
         0)
       0
-    }))
+    }
+  })
 
 ; ------------------------------------------------------------------
 ; Output
@@ -1138,7 +1016,7 @@
 
 (:: wordAt (-> (Vec Int) Int Int))
 (fn (wordAt v i)
-  (cast Int (vecGet v i)))
+  (as (vecGet v i) Int))
 
 ; A word's two bytes XORed together - what the loader folds per word.
 (:: byteFold (-> Int Int))
@@ -1147,7 +1025,8 @@
 
 (:: checksum (-> Asm Int))
 (fn (checksum a)
-  (let ((mut c 0))
+  {
+    (let mut c 0)
     {
       (for i in 0..(vecLen a.cfg)
         (set c (^ c (wordAt a.cfg i))))
@@ -1156,7 +1035,8 @@
       (for i in 0..(vecLen a.proto)
         (set c (^ c (byteFold (wordAt a.proto i)))))
       c
-    }))
+    }
+  })
 
 (:: c3 (-> String String String String))
 (fn (c3 a b c)
@@ -1168,52 +1048,42 @@
 
 (:: listSection (-> String (Vec Int) (Vec String) String))
 (fn (listSection title words src)
-  (let ((mut out (c3 title " (" (c3 (fmtInt (vecLen words)) " words)" "\n"))))
+  {
+    (let mut out (c3 title " (" (c3 (fmtInt (vecLen words)) " words)" "\n")))
     {
       (for i in 0..(vecLen words)
-        (set out (concat out (c5
-          "  "
-          (fmtPadLeft (fmtInt i) 3)
-          "  "
-          (hex4 (wordAt words i))
-          (c3 "  " (vecGet src i) "\n")))))
+        (set out (concat out
+                   (c5 "  " (fmtPadLeft (fmtInt i) 3) "  " (hex4 (wordAt words i))
+                     (c3 "  " (vecGet src i) "\n")))))
       out
-    }))
+    }
+  })
 
 (:: listing (-> Asm String))
 (fn (listing a)
-  (c5
-    (c5
-      "prescale "
-      (fmtInt a.prescale)
-      ", "
-      (fmtInt (vecLen a.cfg))
-      " config byte(s)\n")
-    (listSection "uE0 .phys" a.phys a.physSrc)
-    (listSection "uE1 .protocol" a.proto a.protoSrc)
-    "load checksum (uo_out before go): 0x"
-    (concat (hex2 (checksum a)) "\n")))
+  (c5 (c5 "prescale " (fmtInt a.prescale) ", " (fmtInt (vecLen a.cfg)) " config byte(s)\n")
+    (listSection "uE0 .phys" a.phys a.physSrc) (listSection "uE1 .protocol" a.proto a.protoSrc)
+    "load checksum (uo_out before go): 0x" (concat (hex2 (checksum a)) "\n")))
 
 (:: jsonList (-> (Vec Int) String))
 (fn (jsonList v)
-  (let ((mut out "["))
+  {
+    (let mut out "[")
     {
       (for i in 0..(vecLen v)
-        (set out (c3
-          out
-          (if (== i 0)
-            ""
-            ", ")
-          (fmtInt (wordAt v i)))))
+        (set out (c3 out
+                   (if (== i 0)
+                     ""
+                     ", ")
+                   (fmtInt (wordAt v i)))))
       (concat out "]")
-    }))
+    }
+  })
 
 (:: toJson (-> Asm String))
 (fn (toJson a)
-  (c5
-    (c3 "{\n  \"prescale\": " (fmtInt a.prescale) ",\n")
-    (c3 "  \"cfg\": " (jsonList a.cfg) ",\n")
-    (c3 "  \"phys\": " (jsonList a.phys) ",\n")
+  (c5 (c3 "{\n  \"prescale\": " (fmtInt a.prescale) ",\n")
+    (c3 "  \"cfg\": " (jsonList a.cfg) ",\n") (c3 "  \"phys\": " (jsonList a.phys) ",\n")
     (c3 "  \"protocol\": " (jsonList a.proto) ",\n")
     (c3 "  \"checksum\": " (fmtInt (checksum a)) "\n}\n")))
 
@@ -1221,46 +1091,41 @@
 ; uio_in bits: 0 strobe, 1 byte_sel, 2 go, 3 engine_sel, 4 cfg_sel.
 (:: strobeLine (-> Int Int String))
 (fn (strobeLine data uio)
-  (c5
-    (hex2 data)
-    " "
-    (hex2 uio)
-    "\n"
-    ""))
+  (c5 (hex2 data) " " (hex2 uio) "\n" ""))
 
 (:: wordLines (-> (Vec Int) Int String))
 (fn (wordLines words engineBit)
-  (let ((mut out ""))
+  {
+    (let mut out "")
     {
       (for i in 0..(vecLen words)
-        (let ((w (wordAt words i)))
-          (set out (c3 out (strobeLine (& w 255) engineBit) (strobeLine (>> w 8) (| engineBit 2))))))
+        {
+          (let w (wordAt words i))
+          (set out (c3 out (strobeLine (& w 255) engineBit) (strobeLine (>> w 8) (| engineBit 2))))
+        })
       out
-    }))
+    }
+  })
 
 (:: loadScript (-> Asm String))
 (fn (loadScript a)
-  (let ((mut out (c3 "# tdasm load script for tt_um_dual. Hold rst_n low, release it, then\n# for each `<ui_in> <uio_in>` line (hex): drive ui_in and uio_in, raise\n# uio_in bit 0 (strobe), lower it. Waiting a few clocks at each step\n# is enough (strobe passes a 2-FF synchroniser). After the last line\n# read uo_out: it must equal `checksum`. Then pulse uio_in bit 2 (go).\n" "# prescale\n" (strobeLine a.prescale 0))))
+  {
+    (let mut out
+      (c3
+        "# tdasm load script for tt_um_dual. Hold rst_n low, release it, then\n# for each `<ui_in> <uio_in>` line (hex): drive ui_in and uio_in, raise\n# uio_in bit 0 (strobe), lower it. Waiting a few clocks at each step\n# is enough (strobe passes a 2-FF synchroniser). After the last line\n# read uo_out: it must equal `checksum`. Then pulse uio_in bit 2 (go).\n"
+        "# prescale\n" (strobeLine a.prescale 0)))
     {
       (set out (if (> (vecLen a.cfg) 0)
         (concat out "# bit-pipe config (cfg_sel)\n")
         out))
       (for i in 0..(vecLen a.cfg)
         (set out (concat out (strobeLine (wordAt a.cfg i) 16))))
-      (set out (c5
-        out
-        "# uE0 .phys, "
-        (fmtInt (vecLen a.phys))
-        " words\n"
-        (wordLines a.phys 0)))
-      (set out (c5
-        out
-        "# uE1 .protocol, "
-        (fmtInt (vecLen a.proto))
-        " words\n"
-        (wordLines a.proto 8)))
+      (set out (c5 out "# uE0 .phys, " (fmtInt (vecLen a.phys)) " words\n" (wordLines a.phys 0)))
+      (set out (c5 out "# uE1 .protocol, " (fmtInt (vecLen a.proto)) " words\n"
+                 (wordLines a.proto 8)))
       (c3 out "checksum " (concat (hex2 (checksum a)) "\ngo\n"))
-    }))
+    }
+  })
 
 ;@axiom:effect(io)
 (:: writeOut (-> String String Int))
@@ -1282,42 +1147,51 @@
 (fn (main)
   (if (< sysArgc 2)
     (usage)
-    (let (
-      (src (sysArg 1))
-      (mut jsonPath "")
-      (mut loadPath "")
-      (mut quiet false)
-      (mut i 2)
-    )
+    {
+      (let src (sysArg 1))
+      (let mut jsonPath "")
+      (let mut loadPath "")
+      (let mut quiet false)
+      (let mut i 2)
       {
         (while (< i sysArgc)
-          (let ((f (sysArg i)))
+          {
+            (let f (sysArg i))
             (if (&& (strEq f "--json") (< (+ i 1) sysArgc))
-              {
-                (set jsonPath (sysArg (+ i 1)))
-                (set i (+ i 2))
-              }
+                {
+                  (set jsonPath (sysArg (+ i 1)))
+                  (set i (+ i 2))
+                }
               (&& (strEq f "--load") (< (+ i 1) sysArgc))
-              {
-                (set loadPath (sysArg (+ i 1)))
-                (set i (+ i 2))
-              }
+                {
+                  (set loadPath (sysArg (+ i 1)))
+                  (set i (+ i 2))
+                }
               (strEq f "--quiet")
-              {
-                (set quiet true)
-                (set i (+ i 1))
-              }
+                {
+                  (set quiet true)
+                  (set i (+ i 1))
+                }
               {
                 (usage)
                 (set i sysArgc)
-              })))
+              })
+          })
         (if (neg (fileExists src))
           (die (format "tdasm: cannot read {src}") 1)
           0)
-        (let (
-          (a newAsm)
-          (lines (strSplit (readFile src) 10))
-        )
+        {
+          (let a newAsm)
+          (let text
+            (match (readFile src)
+              ((Ok s) s)
+              ((Err e)
+                {
+                  (die (format "tdasm: cannot read {src}") 1)
+                  ""
+                }
+              )))
+          (let lines (strSplit text 10))
           {
             (runPass a lines 1)
             (flattenCfg a)
@@ -1330,8 +1204,10 @@
                 0)
               0)
             (if (> a.errors 0)
-              (let ((n a.errors))
-                (die (format "tdasm: {n} error(s), nothing written") 1))
+              {
+                (let n a.errors)
+                (die (format "tdasm: {n} error(s), nothing written") 1)
+              }
               {
                 (if quiet
                   0
@@ -1344,5 +1220,7 @@
                   (writeOut loadPath (loadScript a)))
                 0
               })
-          })
-      })))
+          }
+        }
+      }
+    }))

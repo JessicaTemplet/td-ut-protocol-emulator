@@ -365,7 +365,7 @@ pins and loader, and later in cocotb on the shipped Verilog and the hardened net
 
 - `tools/tdasm/` is the assembler and program loader: one `.tds` source holds both engines' programs (labels,
   prescale, bit-pipe config), and it writes a listing, vectors JSON in `gl_test`'s format, and the byte-serial load
-  script for a host with the expected load checksum. It is written in Axiom, pinned to 0.7.8.
+  script for a host with the expected load checksum. It is written in Axiom, pinned to 0.7.9 (ported from 0.7.8 on 2026-10-24, output unchanged).
 - Checked against the hardware's own vectors: the SPI, I2C and USB example sources assemble to exactly the prescale,
   config bytes and words `test/gen_vectors.ml` produces, and nine malformed sources are each refused with the right
   error. Kept out of `run_regression.sh` so the chip's regression does not depend on a third-party compiler.
