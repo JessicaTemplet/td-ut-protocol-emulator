@@ -6,7 +6,8 @@ abstract: >-
   A reprogrammable protocol emulator ASIC for Tiny Tapeout on IHP CMOS5L: two
   microcode engines (physical layer and protocol layer) coupled by a
   backpressured FIFO, with a generic hardware bit pipe (NRZI, bit stuffing,
-  CRC) and a glitch filter. UART, SPI, I2C and USB low-speed receive run as
+  CRC) for receive and transmit, a glitch filter and digital bit-clock
+  recovery. UART, SPI, I2C, USB low-speed and 10 Mbit Ethernet receive run as
   programs loaded over the pins. RTL in Hardcaml; assembler and loader in Axiom.
 authors:
   - family-names: Templet
@@ -22,6 +23,7 @@ keywords:
   - Axiom
   - protocol emulator
   - USB
+  - Ethernet
 references:
   - type: software
     title: Axiom
@@ -30,7 +32,7 @@ references:
       - family-names: Paige
         given-names: Chris
     repository-code: "https://github.com/chrispaig3/Axiom"
-    version: "0.7.8"
+    version: "0.7.9"
   - type: software
     title: Hardcaml
     abstract: "The hardware description library the RTL is written in."

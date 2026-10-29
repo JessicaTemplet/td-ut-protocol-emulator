@@ -44,3 +44,13 @@ formal/fifo/
 /tt_submission/
 *.vcd
 *.fst
+
+# Private working notes never go in this repo: session handoffs, AI-assistant
+# config, and authorship timestamps (kept outside the repo).
+*HANDOFF*
+*handoff*.md
+SESSION_*.md
+.claude/
+CLAUDE.md
+*.ots
+*.bundle

@@ -1,0 +1,35 @@
+{
+  "title": "TD-µT: reprogrammable dual-engine protocol emulator ASIC",
+  "upload_type": "software",
+  "description": "<p>A reprogrammable protocol emulator ASIC for Tiny Tapeout on IHP CMOS5L: two microcode engines (physical layer and protocol layer) coupled by a backpressured FIFO, with a generic hardware bit pipe (NRZI, bit stuffing, CRC) for receive and transmit, a glitch filter and digital bit-clock recovery. UART, SPI, I2C, USB low-speed and 10 Mbit Ethernet receive run as programs loaded over the pins. RTL in Hardcaml; assembler and loader in Axiom.</p><p>Entry for Jane Street's open-source protocol emulator ASIC challenge.</p>",
+  "creators": [
+    {
+      "name": "Templet, Jessica",
+      "orcid": "0009-0009-1513-729X"
+    }
+  ],
+  "license": "Apache-2.0",
+  "keywords": [
+    "ASIC",
+    "Tiny Tapeout",
+    "IHP CMOS5L",
+    "Hardcaml",
+    "Axiom",
+    "protocol emulator",
+    "USB",
+    "Ethernet"
+  ],
+  "related_identifiers": [
+    {
+      "identifier": "https://github.com/JessicaTemplet/td-ut-protocol-emulator",
+      "relation": "isSupplementTo",
+      "resource_type": "software",
+      "scheme": "url"
+    }
+  ],
+  "references": [
+    "Paige, C. Axiom (version 0.7.9). https://github.com/chrispaig3/Axiom",
+    "Jane Street. Hardcaml. https://github.com/janestreet/hardcaml"
+  ],
+  "notes": "Claude (Anthropic) was used for tests, documentation, debugging and review; the assembler and loader (tools/tdasm) was written by Claude. See the AI Usage Disclosure in README.md."
+}
